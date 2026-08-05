@@ -1,0 +1,16 @@
+.git
+.agents
+.scratch
+.next
+.vinext
+.wrangler
+node_modules
+dist
+data
+backups
+outputs
+work
+.env
+.env.*
+!.env.example
+*.log

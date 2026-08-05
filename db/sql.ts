@@ -1,0 +1,57 @@
+export const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS items (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('text', 'link', 'file')),
+    content TEXT,
+    title TEXT,
+    object_key TEXT,
+    original_name TEXT,
+    display_name TEXT,
+    mime_type TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_items_owner_created ON items(owner_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_owner_deleted ON items(owner_id, deleted_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_owner_favorite ON items(owner_id, favorite)`,
+  `CREATE INDEX IF NOT EXISTS idx_items_owner_type ON items(owner_id, type)`,
+  `CREATE TABLE IF NOT EXISTS uploads (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    provider_upload_id TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    parts_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'uploading',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_uploads_owner_status ON uploads(owner_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_uploads_expires ON uploads(expires_at)`,
+  `CREATE TABLE IF NOT EXISTS local_sessions (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    owner_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_local_sessions_expires ON local_sessions(expires_at)`,
+  `CREATE TABLE IF NOT EXISTS auth_challenges (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_auth_challenges_expires ON auth_challenges(expires_at)`,
+] as const;
