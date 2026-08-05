@@ -85,6 +85,23 @@ export const storageSummarySchema = z.object({
     file: z.number().int().nonnegative(),
     trash: z.number().int().nonnegative(),
   }),
+  itemCounts: z.object({
+    text: z.number().int().nonnegative(),
+    link: z.number().int().nonnegative(),
+    file: z.number().int().nonnegative(),
+    trash: z.number().int().nonnegative(),
+  }),
+  largestFile: z.object({
+    id: z.string().uuid(),
+    displayName: z.string(),
+    sizeBytes: z.number().int().nonnegative(),
+  }).nullable(),
+  oldestItem: z.object({
+    id: z.string().uuid(),
+    type: itemTypeSchema,
+    displayName: z.string(),
+    createdAt: z.number().int(),
+  }).nullable(),
 });
 export type StorageSummary = z.infer<typeof storageSummarySchema>;
 

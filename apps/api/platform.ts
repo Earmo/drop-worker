@@ -17,7 +17,10 @@ export type StoredItem = DropItem & {
   objectKey: string | null;
 };
 
-export type UploadRecord = UploadSession & {
+export type UploadCleanupStatus = "cancelling" | "expiring";
+
+export type UploadRecord = Omit<UploadSession, "status"> & {
+  status: UploadSession["status"] | UploadCleanupStatus;
   ownerId: string;
   objectKey: string;
   providerUploadId: string;
@@ -76,7 +79,8 @@ export interface MetadataStore {
   getUpload(ownerId: string, id: string): Promise<UploadRecord | null>;
   saveUploadPart(ownerId: string, id: string, part: UploadedPart): Promise<UploadRecord | null>;
   completeUpload(ownerId: string, id: string): Promise<StoredItem | null>;
-  markUpload(ownerId: string, id: string, status: "cancelled" | "expired"): Promise<UploadRecord | null>;
+  beginUploadCleanup(ownerId: string, id: string, finalStatus: "cancelled" | "expired"): Promise<UploadRecord | null>;
+  finishUploadCleanup(ownerId: string, id: string, finalStatus: "cancelled" | "expired"): Promise<UploadRecord | null>;
   listExpiredUploads(now: number): Promise<UploadRecord[]>;
   listExpiredTrash(before: number): Promise<StoredItem[]>;
   listAllForExport(ownerId: string): Promise<DropItem[]>;

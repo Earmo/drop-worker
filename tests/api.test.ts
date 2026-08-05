@@ -7,6 +7,7 @@ import { runCleanup } from "../apps/api/cleanup";
 import { handleApiRequest } from "../apps/api/create-api";
 import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
 import type { RuntimeServices } from "../apps/api/platform";
+import { SqlMetadataStore, type SqlExecutor } from "../apps/api/stores/sql-metadata";
 import type { DropItem, ListItemsResponse, StorageSummary, UploadSession } from "../packages/contracts";
 
 async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
@@ -46,6 +47,22 @@ function request(
 }
 
 test("文本、搜索、收藏和回收站形成完整生命周期", async () => {
+test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
+  let batchCalled = false;
+  const sql: SqlExecutor = {
+    all: async <T>() => [] as T[],
+    first: async <T>() => null as T | null,
+    run: async () => ({ changes: 0 }),
+    batch: async () => {
+      batchCalled = true;
+      return [];
+    },
+  };
+  const metadata = new SqlMetadataStore(sql, false);
+  await assert.rejects(metadata.ensureSchema(), /数据库架构尚未迁移/);
+  assert.equal(batchCalled, false);
+});
+
   const current = await fixture();
   try {
     const createdResponse = await request(current.services, "/api/items/text", {
@@ -177,6 +194,40 @@ test("并发上传会在数据库内原子预留配额", async () => {
     assert.deepEqual(responses.map((response) => response.status).sort(), [201, 409]);
     const storage = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
     assert.equal(storage.reservedBytes, 4);
+  } finally {
+    await current.close();
+  }
+});
+
+test("上传取消失败会保留预留空间并由清理任务重试", async () => {
+  const current = await fixture(5);
+  try {
+    const upload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "cancel-retry.bin",
+        mimeType: "application/octet-stream",
+        sizeBytes: 4,
+        fingerprint: "cancel-retry:4:1",
+      }),
+    })).json()) as UploadSession;
+    const abortMultipart = current.services.blobs.abortMultipart.bind(current.services.blobs);
+    current.services.blobs.abortMultipart = async () => {
+      throw new Error("模拟分片存储暂时不可用");
+    };
+
+    const failedCancel = await request(current.services, `/api/uploads/${upload.id}`, { method: "DELETE" });
+    assert.equal(failedCancel.status, 500);
+    const retained = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
+    assert.equal(retained.reservedBytes, 4);
+    assert.equal((await current.services.metadata.getUpload("test-owner", upload.id))?.status, "cancelling");
+
+    current.services.blobs.abortMultipart = abortMultipart;
+    const cleanup = await runCleanup(current.services, Date.now());
+    assert.equal(cleanup.expiredUploads, 0);
+    const released = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
+    assert.equal(released.reservedBytes, 0);
+    assert.equal((await current.services.metadata.getUpload("test-owner", upload.id))?.status, "cancelled");
   } finally {
     await current.close();
   }

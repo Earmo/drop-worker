@@ -566,7 +566,7 @@ export function DropApp() {
 
           {view === "cleanup" && storage && (
             <>
-              <CleanupSummary storage={storage} items={visibleItems} />
+              <CleanupSummary storage={storage} />
               <div className="cleanup-filters">
                 <label>
                   时间
@@ -1010,15 +1010,37 @@ function ItemEntry({
   );
 }
 
-function CleanupSummary({ storage, items }: { storage: StorageSummary; items: DropItem[] }) {
+function CleanupSummary({ storage }: { storage: StorageSummary }) {
   const trashBytes = storage.byType.trash;
-  const largest = items.find((item) => item.type === "file");
+  const largest = storage.largestFile;
+  const oldest = storage.oldestItem;
+  const counts = storage.itemCounts;
+  const totalItems = counts.text + counts.link + counts.file;
+  const segments = [
+    { label: "文本", count: counts.text, color: "var(--accent)" },
+    { label: "链接", count: counts.link, color: "var(--blue)" },
+    { label: "文件", count: counts.file, color: "var(--green)" },
+  ];
   return (
-    <section className="cleanup-summary">
+    <>
+      <section className="cleanup-summary">
       <div><small>当前占用</small><strong>{formatBytes(storage.usedBytes)}</strong><span>配额 {formatBytes(storage.quotaBytes)}</span></div>
       <div><small>回收站</small><strong>{formatBytes(trashBytes)}</strong><span>永久删除后释放</span></div>
-      <div><small>最大文件</small><strong className="truncate">{largest?.displayName || largest?.originalName || "无"}</strong><span>{largest ? formatBytes(largest.sizeBytes) : "—"}</span></div>
-    </section>
+        <div><small>最大文件</small><strong className="truncate">{largest?.displayName || "无"}</strong><span>{largest ? formatBytes(largest.sizeBytes) : "—"}</span></div>
+        <div><small>最早内容</small><strong className="truncate">{oldest?.displayName || "无"}</strong><span>{oldest ? `${typeLabel(oldest.type)} · ${formatTime(oldest.createdAt)}` : "—"}</span></div>
+      </section>
+      <section className="type-breakdown" aria-label="内容构成">
+        <div className="type-breakdown-heading"><strong>内容构成</strong><span>{totalItems} 项 · 回收站 {counts.trash} 项</span></div>
+        <div className="type-breakdown-track">
+          {segments.map((segment) => (
+            <span key={segment.label} style={{ width: `${totalItems ? (segment.count / totalItems) * 100 : 0}%`, background: segment.color }} />
+          ))}
+        </div>
+        <div className="type-breakdown-legend">
+          {segments.map((segment) => <span key={segment.label}><i style={{ background: segment.color }} />{segment.label} {segment.count}</span>)}
+        </div>
+      </section>
+    </>
   );
 }
 

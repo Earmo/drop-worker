@@ -11,6 +11,7 @@
 
 - Node.js 24 或更新版本
 - npm 11 或 pnpm 10
+- Windows 11、Linux x64 与 arm64 均可运行；Docker 镜像跟随 Node 官方多架构镜像。
 - Cloudflare 部署需要 Wrangler 4
 - Docker 部署需要 Docker Compose 2.24 或更新版本
 

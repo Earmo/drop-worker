@@ -7,9 +7,21 @@ export async function runCleanup(services: RuntimeServices, now = Date.now()): P
   await services.metadata.ensureSchema();
   const expiredUploads = await services.metadata.listExpiredUploads(now);
   let expiredCount = 0;
-  for (const upload of expiredUploads) {
-    await services.blobs.abortMultipart(upload.objectKey, upload.providerUploadId).catch(() => undefined);
-    if (await services.metadata.markUpload(upload.ownerId, upload.id, "expired")) expiredCount += 1;
+  for (const candidate of expiredUploads) {
+    const finalStatus = candidate.status === "cancelling" ? "cancelled" : "expired";
+    const upload = await services.metadata.beginUploadCleanup(candidate.ownerId, candidate.id, finalStatus);
+    if (!upload) continue;
+    try {
+      await services.blobs.abortMultipart(upload.objectKey, upload.providerUploadId);
+      const finished = await services.metadata.finishUploadCleanup(upload.ownerId, upload.id, finalStatus);
+      if (finished && finalStatus === "expired") expiredCount += 1;
+    } catch (error) {
+      console.error(JSON.stringify({
+        message: "expired upload cleanup failed",
+        uploadId: upload.id,
+        error: error instanceof Error ? error.message : "unknown",
+      }));
+    }
   }
 
   const purgeBefore = now - 30 * 24 * 60 * 60 * 1000;

@@ -970,7 +970,7 @@ textarea:focus-visible {
 
 .cleanup-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-bottom: 25px;
   border-block: 1px solid var(--line);
 }
@@ -998,6 +998,53 @@ textarea:focus-visible {
 }
 
 .cleanup-summary .truncate {
+
+.type-breakdown {
+  display: grid;
+  gap: 10px;
+  margin: -7px 0 25px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.type-breakdown-heading,
+.type-breakdown-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.type-breakdown-heading span,
+.type-breakdown-legend span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.type-breakdown-track {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-strong);
+}
+
+.type-breakdown-track span {
+  min-width: 0;
+  transition: width 200ms ease;
+}
+
+.type-breakdown-legend {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.type-breakdown-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
   overflow: hidden;
   font-size: 14px;
   text-overflow: ellipsis;
@@ -1417,13 +1464,16 @@ textarea:focus-visible {
     padding: 15px;
   }
 
-  .cleanup-summary > div:nth-child(2) {
+  .cleanup-summary > div:nth-child(2n) {
     border-right: 0;
   }
 
-  .cleanup-summary > div:last-child {
-    grid-column: 1 / -1;
+  .cleanup-summary > div:nth-child(n + 3) {
     border-top: 1px solid var(--line);
+  }
+
+  .cleanup-summary > div:last-child {
+    grid-column: auto;
   }
 
   .bulk-bar {

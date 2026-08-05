@@ -28,7 +28,7 @@ class D1Executor implements SqlExecutor {
 }
 
 export function createD1MetadataStore(database: D1Database): SqlMetadataStore {
-  return new SqlMetadataStore(new D1Executor(database));
+  return new SqlMetadataStore(new D1Executor(database), false);
 }
 
 export class R2BlobStore implements BlobStore {
@@ -65,7 +65,13 @@ export class R2BlobStore implements BlobStore {
 
   async abortMultipart(objectKey: string, uploadId: string): Promise<void> {
     const upload = this.bucket.resumeMultipartUpload(objectKey, uploadId);
-    await upload.abort();
+    try {
+      await upload.abort();
+    } catch (error) {
+      const status = (error as { status?: unknown }).status;
+      const message = error instanceof Error ? error.message : String(error);
+      if (status !== 404 && !/no such upload|not found/i.test(message)) throw error;
+    }
   }
 
   async get(objectKey: string): Promise<BlobObject | null> {

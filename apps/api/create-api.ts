@@ -211,7 +211,7 @@ api.post("/api/uploads", async (c) => {
 
 api.get("/api/uploads/:id", async (c) => {
   const upload = await c.env.services.metadata.getUpload(c.get("identity").ownerId, c.req.param("id"));
-  if (!upload) return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在", 404);
+  if (!upload || !["uploading", "completed"].includes(upload.status)) return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在", 404);
   return c.json(upload);
 });
 
@@ -283,11 +283,13 @@ api.post("/api/uploads/:id/complete", async (c) => {
 api.delete("/api/uploads/:id", async (c) => {
   const ownerId = c.get("identity").ownerId;
   const upload = await c.env.services.metadata.getUpload(ownerId, c.req.param("id"));
-  if (!upload || upload.status !== "uploading") {
+  if (!upload || !["uploading", "cancelling"].includes(upload.status)) {
     return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在或已结束", 404);
   }
-  await c.env.services.blobs.abortMultipart(upload.objectKey, upload.providerUploadId);
-  await c.env.services.metadata.markUpload(ownerId, upload.id, "cancelled");
+  const pending = await c.env.services.metadata.beginUploadCleanup(ownerId, upload.id, "cancelled");
+  if (!pending) return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在或已结束", 404);
+  await c.env.services.blobs.abortMultipart(pending.objectKey, pending.providerUploadId);
+  await c.env.services.metadata.finishUploadCleanup(ownerId, pending.id, "cancelled");
   return c.json({ cancelled: true });
 });
 

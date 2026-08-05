@@ -47,7 +47,7 @@ type UploadRow = {
   size_bytes: number;
   fingerprint: string;
   parts_json: string;
-  status: "uploading" | "completed" | "cancelled" | "expired";
+  status: "uploading" | "completed" | "cancelled" | "expired" | "cancelling" | "expiring";
   created_at: number;
   updated_at: number;
   expires_at: number;
@@ -121,13 +121,19 @@ function uploadFromRow(row: UploadRow): UploadRecord {
 }
 
 export class SqlMetadataStore implements MetadataStore {
-  constructor(private readonly sql: SqlExecutor) {}
+  constructor(
+    private readonly sql: SqlExecutor,
+    private readonly autoCreateSchema = true,
+  ) {}
 
   async ensureSchema(): Promise<void> {
     const existing = await this.sql.first<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'items'",
     );
     if (existing) return;
+    if (!this.autoCreateSchema) {
+      throw new Error("数据库架构尚未迁移，请先应用正式迁移");
+    }
     await this.sql.batch(schemaStatements.map((sql) => ({ sql })));
   }
 
@@ -288,12 +294,14 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async storageSummary(ownerId: string, quotaBytes: number): Promise<StorageSummary> {
-    const [usage, reserved] = await Promise.all([
+    const [usage, reserved, largestFile, oldestItem] = await Promise.all([
       this.sql.first<{
         used_bytes: number | null;
         file_bytes: number | null;
         trash_bytes: number | null;
         text_count: number | null;
+        file_count: number | null;
+        trash_count: number | null;
         link_count: number | null;
       }>(
         `SELECT
@@ -301,12 +309,30 @@ export class SqlMetadataStore implements MetadataStore {
           SUM(CASE WHEN type = 'file' AND deleted_at IS NULL THEN size_bytes ELSE 0 END) AS file_bytes,
           SUM(CASE WHEN type = 'file' AND deleted_at IS NOT NULL THEN size_bytes ELSE 0 END) AS trash_bytes,
           SUM(CASE WHEN type = 'text' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS text_count,
-          SUM(CASE WHEN type = 'link' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS link_count
+          SUM(CASE WHEN type = 'link' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS link_count,
+          SUM(CASE WHEN type = 'file' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS file_count,
+          SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS trash_count
          FROM items WHERE owner_id = ?`,
         [ownerId],
       ),
       this.sql.first<{ reserved_bytes: number | null }>(
-        "SELECT SUM(size_bytes) AS reserved_bytes FROM uploads WHERE owner_id = ? AND status = 'uploading'",
+        "SELECT SUM(size_bytes) AS reserved_bytes FROM uploads WHERE owner_id = ? AND status IN ('uploading', 'cancelling', 'expiring')",
+        [ownerId],
+      ),
+      this.sql.first<{ id: string; display_name: string; size_bytes: number }>(
+        `SELECT id, COALESCE(display_name, original_name, '未命名文件') AS display_name, size_bytes
+         FROM items
+         WHERE owner_id = ? AND deleted_at IS NULL AND favorite = 0 AND type = 'file'
+         ORDER BY size_bytes DESC, created_at ASC LIMIT 1`,
+        [ownerId],
+      ),
+      this.sql.first<{ id: string; type: "text" | "link" | "file"; display_name: string; created_at: number }>(
+        `SELECT id, type,
+          COALESCE(display_name, original_name, title, SUBSTR(content, 1, 80), '未命名内容') AS display_name,
+          created_at
+         FROM items
+         WHERE owner_id = ? AND deleted_at IS NULL AND favorite = 0
+         ORDER BY created_at ASC, id ASC LIMIT 1`,
         [ownerId],
       ),
     ]);
@@ -321,6 +347,23 @@ export class SqlMetadataStore implements MetadataStore {
         file: usage?.file_bytes ?? 0,
         trash: usage?.trash_bytes ?? 0,
       },
+      itemCounts: {
+        text: usage?.text_count ?? 0,
+        link: usage?.link_count ?? 0,
+        file: usage?.file_count ?? 0,
+        trash: usage?.trash_count ?? 0,
+      },
+      largestFile: largestFile ? {
+        id: largestFile.id,
+        displayName: largestFile.display_name,
+        sizeBytes: largestFile.size_bytes,
+      } : null,
+      oldestItem: oldestItem ? {
+        id: oldestItem.id,
+        type: oldestItem.type,
+        displayName: oldestItem.display_name,
+        createdAt: oldestItem.created_at,
+      } : null,
     };
   }
 
@@ -417,23 +460,42 @@ export class SqlMetadataStore implements MetadataStore {
     return this.getItem(ownerId, id);
   }
 
-  async markUpload(
+  async beginUploadCleanup(
     ownerId: string,
     id: string,
-    status: "cancelled" | "expired",
+    finalStatus: "cancelled" | "expired",
   ): Promise<UploadRecord | null> {
     const upload = await this.getUpload(ownerId, id);
-    if (!upload || upload.status !== "uploading") return null;
+    const pendingStatus = finalStatus === "cancelled" ? "cancelling" : "expiring";
+    if (!upload || (upload.status !== "uploading" && upload.status !== pendingStatus)) return null;
     await this.sql.run(
-      "UPDATE uploads SET status = ?, updated_at = ? WHERE owner_id = ? AND id = ?",
-      [status, Date.now(), ownerId, id],
+      `UPDATE uploads SET status = ?, updated_at = ?
+       WHERE owner_id = ? AND id = ? AND status IN ('uploading', ?)`,
+      [pendingStatus, Date.now(), ownerId, id, pendingStatus],
     );
-    return { ...upload, status };
+    return { ...upload, status: pendingStatus };
+  }
+
+  async finishUploadCleanup(
+    ownerId: string,
+    id: string,
+    finalStatus: "cancelled" | "expired",
+  ): Promise<UploadRecord | null> {
+    const pendingStatus = finalStatus === "cancelled" ? "cancelling" : "expiring";
+    const upload = await this.getUpload(ownerId, id);
+    if (!upload || upload.status !== pendingStatus) return null;
+    await this.sql.run(
+      "UPDATE uploads SET status = ?, updated_at = ? WHERE owner_id = ? AND id = ? AND status = ?",
+      [finalStatus, Date.now(), ownerId, id, pendingStatus],
+    );
+    return { ...upload, status: finalStatus };
   }
 
   async listExpiredUploads(now: number): Promise<UploadRecord[]> {
     const rows = await this.sql.all<UploadRow>(
-      `SELECT ${UPLOAD_COLUMNS} FROM uploads WHERE status = 'uploading' AND expires_at <= ? LIMIT 200`,
+      `SELECT ${UPLOAD_COLUMNS} FROM uploads
+       WHERE status IN ('cancelling', 'expiring')
+          OR (status = 'uploading' AND expires_at <= ?) LIMIT 200`,
       [now],
     );
     return rows.map(uploadFromRow);

@@ -39,7 +39,7 @@ export const uploads = sqliteTable(
     fingerprint: text("fingerprint").notNull(),
     partsJson: text("parts_json").notNull().default("[]"),
     status: text("status", {
-      enum: ["uploading", "completed", "cancelled", "expired"],
+      enum: ["uploading", "completed", "cancelled", "expired", "cancelling", "expiring"],
     })
       .notNull()
       .default("uploading"),
