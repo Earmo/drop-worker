@@ -219,6 +219,12 @@ export function DropApp() {
     document.documentElement.dataset.theme = next;
   };
 
+  const changeView = (next: View) => {
+    setView(next);
+    setSelected(new Set());
+    setSidebarOpen(false);
+  };
+
   const runItemAction = async (
     ids: string[],
     action: "trash" | "restore" | "purge",
@@ -429,11 +435,7 @@ export function DropApp() {
     <div className="app-shell">
       <Sidebar
         view={view}
-        onView={(next) => {
-          setView(next);
-          setSelected(new Set());
-          setSidebarOpen(false);
-        }}
+        onView={changeView}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         auth={auth}
@@ -524,7 +526,10 @@ export function DropApp() {
                 <button
                   key={value}
                   className={type === value ? "active" : ""}
-                  onClick={() => setType(value)}
+                  onClick={() => {
+                    setType(value);
+                    setSelected(new Set());
+                  }}
                 >
                   {value === "all" ? "全部" : typeLabel(value)}
                 </button>
@@ -614,7 +619,7 @@ export function DropApp() {
       </main>
 
       {notice && <div className="toast" role="status">{notice}</div>}
-      <MobileNav view={view} onView={setView} />
+      <MobileNav view={view} onView={changeView} />
     </div>
   );
 }
@@ -759,6 +764,7 @@ function Composer({
             ref={fileInput}
             type="file"
             multiple
+            accept="*/*"
             hidden
             onChange={(event) => {
               addFiles(Array.from(event.target.files || []));
@@ -800,6 +806,7 @@ function UploadQueue({
               <RotateCcw size={15} /> 选择原文件
               <input
                 type="file"
+                accept="*/*"
                 hidden
                 onChange={(event) => {
                   const file = event.target.files?.[0];

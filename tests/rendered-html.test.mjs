@@ -38,3 +38,13 @@ test("成品源码包含核心工作区且不再引用预览骨架", async () =>
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
 });
+
+test("视图筛选切换会清理选择，并使用通用文件选择器", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /const changeView = \(next: View\) => \{[\s\S]*?setSelected\(new Set\(\)\)/);
+  assert.match(app, /<MobileNav view=\{view\} onView=\{changeView\} \/>/);
+  assert.doesNotMatch(app, /<MobileNav view=\{view\} onView=\{setView\} \/>/);
+  assert.match(app, /setType\(value\);\s*setSelected\(new Set\(\)\)/);
+  assert.match(app, /type="file"[\s\S]*?accept="\*\/\*"/g);
+  assert.equal((app.match(/accept="\*\/\*"/g) || []).length, 2);
+});
