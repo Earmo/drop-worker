@@ -6,9 +6,9 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 ## 界面预览
 
 <p align="center">
-  <img src="docs/images/drop-worker-login.png" alt="Drop Worker 登录页" width="75%" /><br />
-  <img src="docs/images/drop-worker-workspace.png" alt="Drop Worker 时间流工作区" width="75%" /><br />
-  <img src="docs/images/drop-worker-cleanup.png" alt="Drop Worker 存储清理" width="75%" />
+  <img src="docs/images/drop-worker-login.png" alt="Drop Worker 登录页" width="88%" /><br />
+  <img src="docs/images/drop-worker-workspace.png" alt="Drop Worker 时间流工作区" width="88%" /><br />
+  <img src="docs/images/drop-worker-cleanup.png" alt="Drop Worker 存储清理" width="88%" />
 </p>
 
 应用支持两种正式部署方式：
@@ -83,6 +83,18 @@ docker compose up -d --build
 默认映射到主机 `3000` 端口。需要更换主机端口时设置 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
 
 Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
+
+### 使用 Docker Hub 镜像
+
+也可以直接拉取已发布的多架构镜像，不需要在本地构建：
+
+```powershell
+Copy-Item .env.example .env
+docker pull earmo/drop-worker:latest
+docker run -d --name drop-worker --restart unless-stopped --env-file .env -e DATA_DIR=/app/data -p 3000:3000 -v drop-worker-data:/app/data earmo/drop-worker:latest
+```
+
+默认访问地址为 `http://localhost:3000`。如需更换主机端口，修改 `-p` 左侧的端口号；应用数据保存在 `drop-worker-data` 命名卷中。
 
 ### 自动发布 Docker 镜像
 

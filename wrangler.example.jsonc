@@ -56,7 +56,7 @@
     // 认证模式；smtp-otp 表示使用邮箱一次性验证码登录。
     "AUTH_MODE": "smtp-otp",
     // 验证码邮件提供方：cloudflare 使用 Email Service，smtp 使用自定义 SMTP。
-    "AUTH_EMAIL_PROVIDER": "cloudflare",
+    "AUTH_EMAIL_PROVIDER": "smtp",
     // 单实例最大存储空间，单位为字节。
     "MAX_STORAGE_BYTES": "10737418240",
     // 唯一允许登录的个人邮箱，也用于接收验证码。
@@ -66,9 +66,9 @@
     // 验证码邮件显示的发件人名称。
     "AUTH_FROM_NAME": "Drop Worker",
     // 自定义 SMTP 服务器地址；AUTH_EMAIL_PROVIDER 为 smtp 时必填。
-    "SMTP_HOST": "",
+    "SMTP_HOST": "smtp.163.com",
     // SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS）。
-    "SMTP_PORT": "587",
+    "SMTP_PORT": "994",
     // 是否使用隐式 TLS；465/994 通常设为 true，587 通常设为 false 并使用 STARTTLS。
     "SMTP_SECURE": "false",
     // 自定义 SMTP 的实际发件地址；留空时回退到 AUTH_FROM_EMAIL。
