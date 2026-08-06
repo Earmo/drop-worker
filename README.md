@@ -1,8 +1,7 @@
 # Drop Worker
 
-Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。它提供最新优先的时间流、搜索和类型筛选、收藏、回收站、存储清理、500 MB 分片上传与断点续传。
-
-产品展示名称为 **Drop Worker**；代码目录、npm 包名、Worker 名称、数据库文件名和 API 协议标识继续使用 `drop-worker`，以保持部署和数据兼容性。
+Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。
+提供最新优先的时间流、搜索和类型筛选、收藏、回收站、存储清理、500MB文件分片上传与断点续传。
 
 ## 界面预览
 
@@ -84,6 +83,17 @@ docker compose up -d --build
 默认映射到主机 `3000` 端口。需要更换主机端口时设置 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
 
 Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
+
+### 自动发布 Docker 镜像
+
+向 GitHub 仓库推送任意 tag 后，`发布 Docker 镜像` 工作流会自动构建并推送多架构镜像（`linux/amd64` 和 `linux/arm64`）到 Docker Hub。每个 tag 会生成同名镜像标签，同时更新 `latest` 标签。
+
+首次使用前，在仓库的 Settings → Secrets and variables → Actions 中配置：
+
+- Repository variable：`DOCKERHUB_USERNAME`，Docker Hub 用户名或组织名。
+- Repository secret：`DOCKERHUB_TOKEN`，具有推送权限的 Docker Hub Access Token。
+
+例如推送 `v0.1.0` 后，镜像地址为 `docker.io/<DOCKERHUB_USERNAME>/drop-worker:v0.1.0`。
 
 ## Linux systemd
 

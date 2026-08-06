@@ -28,6 +28,8 @@ jobs:
           cache: npm
       - name: 安装依赖
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: 生产构建
+        run: npm run build
       - name: 检查绑定类型
         run: npm run cf:types:check
       - name: 类型检查
@@ -36,8 +38,6 @@ jobs:
         run: npm run lint
       - name: 行为测试
         run: npm run test:unit
-      - name: 生产构建
-        run: npm run build
       - name: 渲染测试
         run: npm run test:render
 
