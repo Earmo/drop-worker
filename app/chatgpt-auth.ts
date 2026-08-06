@@ -19,6 +19,7 @@ const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
+  // Sites/ChatGPT 身份由反向代理注入请求头；页面只读取，不接受客户端查询参数伪造身份。
   const requestHeaders = await headers();
   const userId = requestHeaders.get(USER_ID_HEADER);
   const email = requestHeaders.get(USER_EMAIL_HEADER);
@@ -49,6 +50,7 @@ export async function requireChatGPTUser(
 }
 
 export function chatGPTSignInPath(returnTo: string): string {
+  // 登录完成后允许回到原页面，但必须先收敛为同源相对路径，阻止开放重定向。
   const safeReturnTo = safeRelativeReturnPath(returnTo);
   return `${SIGN_IN_PATH}?return_to=${encodeURIComponent(safeReturnTo)}`;
 }
@@ -59,6 +61,7 @@ export function chatGPTSignOutPath(returnTo = "/"): string {
 }
 
 function safeRelativeReturnPath(value: string): string {
+  // 依次拒绝空外部 URL、协议相对 URL 和认证回调路径，避免跳转到外站或形成登录循环。
   if (!value.startsWith("/") || value.startsWith("//")) return "/";
 
   let url: URL;
@@ -82,6 +85,7 @@ function isReservedAuthPath(pathname: string): boolean {
 }
 
 function safeDecodeURIComponent(value: string): string | null {
+  // 代理可能传入格式损坏的 percent-encoding；展示名称解码失败时回退到邮箱。
   try {
     return decodeURIComponent(value);
   } catch {

@@ -1,5 +1,6 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
+// Drizzle schema 是迁移和类型生成的来源；字段名映射到运行时共享的 snake_case SQL 表。
 export const items = sqliteTable(
   "items",
   {
@@ -27,6 +28,7 @@ export const items = sqliteTable(
 );
 
 export const uploads = sqliteTable(
+  // 未完成上传的 partsJson 与对象存储 multipart 会话共同构成断点续传状态。
   "uploads",
   {
     id: text("id").primaryKey(),
@@ -67,6 +69,7 @@ export const localSessions = sqliteTable(
 );
 
 export const authChallenges = sqliteTable(
+  // 验证码挑战与会话分开保存，挑战过期/次数耗尽后不能直接换成登录会话。
   "auth_challenges",
   {
     id: text("id").primaryKey(),

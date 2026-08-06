@@ -1,0 +1,102 @@
+{
+  // Wrangler 配置 JSON Schema：为编辑器提供字段补全和校验。
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Worker 在 Cloudflare 中的名称，也是默认部署目标名称。
+  "name": "drop-worker",
+  // 构建产物中的 Worker 入口文件；npm run build 会生成它。
+  "main": "dist/server/index.js",
+  // 固定 Workers 运行时兼容行为；升级运行时前请先验证并更新日期。
+  "compatibility_date": "2026-08-05",
+  // 启用 Node.js 兼容层，供 Worker 中使用 Node 风格 API 的依赖运行。
+  "compatibility_flags": ["nodejs_compat"],
+  // 将前端静态资源与 Worker 一起发布。
+  "assets": {
+    // Vite/Vinext 构建出的浏览器端静态文件目录。
+    "directory": "./dist/client",
+    // Worker 中通过 env.ASSETS 访问静态资源绑定。
+    "binding": "ASSETS",
+    // 找不到静态文件时返回 SPA 入口，交给前端路由处理。
+    "not_found_handling": "single-page-application"
+  },
+  // D1 SQLite 数据库绑定。
+  "d1_databases": [
+    {
+      // Worker 代码通过 env.DB 使用这个数据库。
+      "binding": "DB",
+      // Cloudflare 控制台中的数据库名称。
+      "database_name": "drop-worker",
+      // 目标 D1 数据库 UUID；部署前替换为自己的 ID。
+      "database_id": "<D1_DATABASE_ID>",
+      // Drizzle/D1 迁移文件目录。
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  // R2 对象存储桶绑定，用于保存上传文件。
+  "r2_buckets": [
+    {
+      // Worker 代码通过 env.FILES 使用这个桶。
+      "binding": "FILES",
+      // Cloudflare R2 控制台中的桶名称。
+      "bucket_name": "drop-worker-files"
+    }
+  ],
+  // Cloudflare Email Service 发信绑定；改用自定义 SMTP 时可以删除整个 send_email 数组。
+  "send_email": [
+    {
+      // Worker 代码通过 env.EMAIL 发送邮件。
+      "name": "EMAIL",
+      // 固定允许投递到的收件地址；这里填写自己的邮箱。
+      "destination_address": "you@example.com",
+      // 本地 Wrangler 开发也使用远程 Email Service 绑定。
+      "remote": true
+    }
+  ],
+  // 非机密运行时变量。会以明文进入 Worker 配置，不要放密码或 Token。
+  "vars": {
+    // 认证模式；smtp-otp 表示使用邮箱一次性验证码登录。
+    "AUTH_MODE": "smtp-otp",
+    // 验证码邮件提供方：cloudflare 使用 Email Service，smtp 使用自定义 SMTP。
+    "AUTH_EMAIL_PROVIDER": "cloudflare",
+    // 单实例最大存储空间，单位为字节。
+    "MAX_STORAGE_BYTES": "10737418240",
+    // 唯一允许登录的个人邮箱，也用于接收验证码。
+    "OWNER_EMAIL": "you@example.com",
+    // 验证码邮件的发件地址；使用 Cloudflare Email Service 时必须是已验证域名地址。
+    "AUTH_FROM_EMAIL": "noreply@example.com",
+    // 验证码邮件显示的发件人名称。
+    "AUTH_FROM_NAME": "drop-worker",
+    // 自定义 SMTP 服务器地址；AUTH_EMAIL_PROVIDER 为 smtp 时必填。
+    "SMTP_HOST": "",
+    // SMTP 端口，只支持 465（隐式 TLS）或 587（STARTTLS）。
+    "SMTP_PORT": "587",
+    // 是否使用隐式 TLS；465 通常设为 true，587 通常设为 false 并使用 STARTTLS。
+    "SMTP_SECURE": "false",
+    // 自定义 SMTP 的实际发件地址；留空时回退到 AUTH_FROM_EMAIL。
+    "SMTP_FROM": "",
+    // SMTP 连接超时时间，单位为毫秒。
+    "SMTP_TIMEOUT_MS": "15000",
+    // 使用 Cloudflare Access JWT 身份时填写团队域名；邮箱验证码模式可留空。
+    "CF_ACCESS_TEAM_DOMAIN": "",
+    // 使用 Cloudflare Access JWT 身份时填写 Access 应用 Audience；邮箱验证码模式可留空。
+    "CF_ACCESS_AUD": ""
+  },
+  // 定时任务配置；17 * * * * 表示每小时执行一次计划清理任务。
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  // Cloudflare Worker 可观测性配置。
+  "observability": {
+    // 开启日志和追踪。
+    "enabled": true,
+    "logs": {
+      // 记录 100% 的请求日志采样；应用自身不会记录正文、验证码或密码。
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      // 开启请求追踪。
+      "enabled": true,
+      // 只采样 1% 的追踪，降低生产开销。
+      "head_sampling_rate": 0.01
+    }
+  }
+}

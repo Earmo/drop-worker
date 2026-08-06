@@ -20,6 +20,7 @@ class D1Executor implements SqlExecutor {
   }
 
   async batch(statements: Array<{ sql: string; params?: SqlValue[] }>): Promise<Array<{ changes: number }>> {
+    // D1 batch 在 Cloudflare 侧作为一组语句执行，SQL 适配器只把平台结果转换成通用 changes 数值。
     const results = await this.database.batch(
       statements.map(({ sql, params = [] }) => this.database.prepare(sql).bind(...params)),
     );
@@ -47,6 +48,7 @@ export class R2BlobStore implements BlobStore {
     partNumber: number,
     bytes: Uint8Array,
   ): Promise<string> {
+    // R2 multipart 的 uploadId 由数据库保存，断点续传时通过同一个 ID 恢复供应商会话。
     const upload = this.bucket.resumeMultipartUpload(objectKey, uploadId);
     const part = await upload.uploadPart(partNumber, bytes);
     return part.etag;
@@ -58,6 +60,7 @@ export class R2BlobStore implements BlobStore {
     parts: UploadedPart[],
     contentType: string,
   ): Promise<void> {
+    // R2 只需要 partNumber + ETag；分片大小由元数据层负责校验。
     void contentType;
     const upload = this.bucket.resumeMultipartUpload(objectKey, uploadId);
     await upload.complete(parts.map(({ partNumber, etag }) => ({ partNumber, etag })));
@@ -68,6 +71,7 @@ export class R2BlobStore implements BlobStore {
     try {
       await upload.abort();
     } catch (error) {
+      // 404 表示供应商端已没有该 multipart，会话清理可视为已经完成，保持清理任务幂等。
       const status = (error as { status?: unknown }).status;
       const message = error instanceof Error ? error.message : String(error);
       if (status !== 404 && !/no such upload|not found/i.test(message)) throw error;

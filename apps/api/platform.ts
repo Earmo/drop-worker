@@ -17,6 +17,7 @@ export type StoredItem = DropItem & {
   objectKey: string | null;
 };
 
+// 这两个中间状态代表已领取外部清理租约，但对象存储删除尚未完成。
 export type UploadCleanupStatus = "cancelling" | "expiring";
 
 export type UploadRecord = Omit<UploadSession, "status"> & {
@@ -26,6 +27,7 @@ export type UploadRecord = Omit<UploadSession, "status"> & {
   providerUploadId: string;
 };
 
+// 列表筛选统一由存储层实现；cursor 是 offset，limit 的上限由 contracts schema 限制。
 export type ListOptions = {
   type?: ItemType;
   query?: string;

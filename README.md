@@ -4,7 +4,7 @@
 
 应用支持两种正式部署方式：
 
-- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用 Cloudflare Access 或私有 Sites 身份。
+- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用 Cloudflare Email Service 邮箱验证码或私有 Sites 身份。
 - 本地自托管：单个 Node.js 进程 + SQLite + 本地文件系统，可使用 Docker Compose 或直接命令运行。
 
 ## 环境要求
@@ -39,6 +39,8 @@ pnpm start
 
 默认地址为 `http://localhost:3000`。SQLite、文件对象和未完成上传默认保存在 `./data`。
 
+本地自托管入口是 `server/local.ts`：元数据使用 Node.js 内置 SQLite，文件和上传分片使用 `DATA_DIR` 下的本地文件系统。该模式不读取 `wrangler.jsonc`，不连接 D1 或 R2，也不需要 Cloudflare 账号与 Wrangler。
+
 ### 邮件验证码模式
 
 将 `.env` 中的 `AUTH_MODE` 改为 `smtp-otp`，并填写：
@@ -70,6 +72,8 @@ docker compose up -d --build
 ```
 
 默认映射到主机 `3000` 端口。需要更换主机端口时设置 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
+
+Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
 
 ## Linux systemd
 
@@ -114,12 +118,22 @@ pnpm admin -- remote-restore ./backups/cloudflare
 
 ## Cloudflare 直接部署
 
+仓库只提交脱敏的 `wrangler.example.jsonc`。首次部署前先复制一份本地配置：
+
+```powershell
+Copy-Item wrangler.example.jsonc wrangler.jsonc
+```
+
+模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1、R2、邮件、变量、定时任务和可观测性配置。
+
+然后编辑 `wrangler.jsonc` 中的 `<D1_DATABASE_ID>`、R2 桶名、个人邮箱和发件地址。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
+
 `wrangler.jsonc` 声明了 D1、R2、静态资源、每小时清理任务和可观测性。首次部署前：
 
-1. 配置 `OWNER_EMAIL`、`CF_ACCESS_TEAM_DOMAIN` 和 `CF_ACCESS_AUD`。
-2. 在 Cloudflare Zero Trust 中启用 One-time PIN，并为自己的域名或子域名创建仅允许该个人邮箱访问的 Access 应用。
-3. 将 Access 应用的会话时长设置为 30 天，使已验证设备在 30 天内无需再次输入验证码。
-4. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并确保该主机名同时受上述 Access 应用保护。
+1. 在 Cloudflare Email Service 中启用发信域名，并验证接收验证码的个人邮箱。
+2. 配置 `OWNER_EMAIL`、`AUTH_FROM_EMAIL` 和 `AUTH_FROM_NAME`。`AUTH_FROM_EMAIL` 必须属于已在 Email Service 中验证的域名；`send_email` 绑定固定收件人，发件地址可以按配置切换。
+3. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
+4. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名。
 5. 生成类型并应用 D1 迁移。
 6. 构建并部署 Worker。
 
@@ -129,9 +143,87 @@ npx wrangler d1 migrations apply drop-worker --remote --config wrangler.jsonc
 npm run cf:deploy
 ```
 
-`CF_ACCESS_TEAM_DOMAIN` 使用完整的团队域名，例如 `https://example.cloudflareaccess.com`。应用会验证 Access JWT 的签发方、Audience 和邮箱；R2 桶保持私有。
+验证码 10 分钟有效，连续输入错误 5 次后失效，同一邮箱 60 秒内不能重复发送。登录会话通过 HttpOnly、Secure Cookie 保持 30 天；R2 桶保持私有。
 
-仓库中的 GitHub Actions 会在 Pull Request 上执行检查，并在 `main` 更新后自动部署。需要在仓库 Secrets 中设置 `CLOUDFLARE_API_TOKEN` 和 `CLOUDFLARE_ACCOUNT_ID`。生产数据库迁移保持为独立人工步骤，不会在应用启动或每次部署时隐式执行。
+### Cloudflare 自定义 SMTP
+
+如果不使用 Cloudflare Email Service，可以切换为自定义 SMTP。Cloudflare Workers 的 TCP Socket 不允许连接 25 端口，因此 SMTP 必须使用 465（隐式 TLS）或 587（STARTTLS）：
+
+```jsonc
+{
+  "vars": {
+    "AUTH_EMAIL_PROVIDER": "smtp",
+    "SMTP_HOST": "smtp.example.com",
+    "SMTP_PORT": "587",
+    "SMTP_SECURE": "false",
+    "SMTP_FROM": "drop-worker@example.com",
+    "AUTH_FROM_NAME": "drop-worker"
+  }
+}
+```
+
+然后把凭据写入 Worker Secret：
+
+```powershell
+"你的 SMTP 用户名" | npx wrangler secret put SMTP_USERNAME
+"你的 SMTP 密码" | npx wrangler secret put SMTP_PASSWORD
+npm run cf:deploy
+```
+
+SMTP 用户名和密码不会写入 `wrangler.jsonc` 或日志。Cloudflare 部署使用 SMTP 配置时，`SMTP_FROM` 是实际发件地址；留空时回退到 `AUTH_FROM_EMAIL`。使用自定义 SMTP 时不需要 `send_email` 绑定，GitHub Actions 生成的生产配置会自动省略它。
+
+### 从本机部署 Cloudflare Worker
+
+以下命令虽然从本机执行，但部署目标仍是 Cloudflare Worker，因此生产数据使用配置中的 D1/R2；它们不属于前文的本地自托管。GitHub Actions 自动部署是额外入口，不替代这些 Wrangler 命令。仓库根目录中保留自己的、已被 Git 忽略的 `wrangler.jsonc` 后，可直接运行：
+
+```powershell
+npm ci
+npm run build
+npm run cf:types:check
+npm run cf:dry-run
+npm run cf:deploy
+```
+
+`cf:dry-run` 会构建并检查本机 `wrangler.jsonc`，但不会上传；`cf:deploy` 会使用同一份本机配置完成构建和部署。也可以直接执行 `npx wrangler deploy --config wrangler.jsonc`。`scripts/render-wrangler-config.mjs` 只供 GitHub Actions 生成临时生产配置，不参与本地部署命令。
+
+### GitHub Actions 自动部署
+
+Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生产配置。代码 push 到 `main` 后会先完成类型检查、Lint、测试和生产构建；全部通过后，部署任务会从 GitHub `production` Environment 读取配置，生成临时 `wrangler.jsonc`，同步 Worker Secret 并自动部署。真实配置不会进入仓库。
+
+在 GitHub 仓库的 `Settings > Environments` 中创建 `production` Environment，并配置以下 Variables：
+
+| Variable | 用途 | 留空时的默认值 |
+| --- | --- | --- |
+| `WORKER_NAME` | Worker 名称 | `drop-worker` |
+| `D1_DATABASE_NAME` | D1 数据库名称 | 与 Worker 名称相同 |
+| `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
+| `AUTH_EMAIL_PROVIDER` | `cloudflare` 或 `smtp` | `cloudflare` |
+| `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
+| `AUTH_FROM_NAME` | 邮件显示的发件人名称 | Worker 名称 |
+| `SMTP_PORT` | SMTP 端口，只能是 465 或 587 | `587` |
+| `SMTP_SECURE` | 是否使用隐式 TLS | `false` |
+| `SMTP_TIMEOUT_MS` | SMTP 超时毫秒数 | `15000` |
+| `CF_ACCESS_TEAM_DOMAIN` | 可选的 Cloudflare Access 团队域名 | 空 |
+| `CF_ACCESS_AUD` | 可选的 Cloudflare Access Audience | 空 |
+
+再配置以下 Secrets。GitHub Variables 不是机密存储，个人邮箱、资源 ID、账号凭据和密码应放在 Secrets：
+
+| Secret | 用途 | 要求 |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | Wrangler 部署凭据 | 必填 |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
+| `D1_DATABASE_ID` | 生产 D1 数据库 UUID | 必填 |
+| `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
+| `AUTH_FROM_EMAIL` | Cloudflare Email Service 发件地址或 SMTP 回退地址 | Cloudflare 发信时必填 |
+| `AUTH_SESSION_SECRET` | 30 天会话签名密钥 | 必填，至少 32 字节随机值 |
+| `SMTP_HOST` | 自定义 SMTP 服务器 | SMTP 模式必填 |
+| `SMTP_FROM` | 自定义 SMTP 实际发件地址 | SMTP 模式可与 `AUTH_FROM_EMAIL` 二选一 |
+| `SMTP_USERNAME` | SMTP 用户名 | SMTP 模式必填 |
+| `SMTP_PASSWORD` | SMTP 密码 | SMTP 模式必填 |
+
+部署配置由 `scripts/render-wrangler-config.mjs` 校验。缺少必填值、D1 ID 不是 UUID、SMTP 端口错误或 Secret 未配置时，工作流会明确失败，不会拿脱敏模板部署到生产。
+
+生产数据库迁移保持为独立人工步骤，不会在应用启动或每次部署时隐式执行。
 
 ## 开发与验证
 

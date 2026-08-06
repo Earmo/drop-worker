@@ -24,12 +24,14 @@ type LocalManifest = {
 };
 
 async function hashFile(path: string): Promise<string> {
+  // 使用流式哈希，备份大文件时不会把整个对象一次性读入内存。
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
 }
 
 function safeManifestPath(root: string, path: string): string {
+  // 清单中的路径属于不可信输入；恢复前强制限制在备份目录内，阻断 ../ 越界写入。
   const candidate = resolve(root, path);
   if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) {
     throw new Error(`备份清单包含越界路径：${path}`);
@@ -38,6 +40,7 @@ function safeManifestPath(root: string, path: string): string {
 }
 
 function remoteHeaders(json = false): Headers {
+  // 远程迁移只从环境变量读取认证信息，并统一附加到每个 API 请求，不把凭据写入备份清单。
   const headers = new Headers();
   if (json) headers.set("content-type", "application/json");
   if (process.env.DROP_WORKER_COOKIE) headers.set("cookie", process.env.DROP_WORKER_COOKIE);
@@ -64,6 +67,7 @@ async function remoteFetch(path: string, init?: RequestInit): Promise<Response> 
 }
 
 export async function remoteBackup(destinationArgument?: string): Promise<void> {
+  // 远程备份先导出元数据，再逐个下载文件并记录 SHA-256；文本/链接只保留元数据。
   const destination = resolve(destinationArgument || `./backups/portable-${Date.now()}`);
   await mkdir(destination, { recursive: false });
   const filesRoot = resolve(destination, "files");
@@ -92,6 +96,7 @@ export async function remoteBackup(destinationArgument?: string): Promise<void> 
 }
 
 async function uploadRemoteFile(filePath: string, item: PortableManifest["items"][number]): Promise<DropItem> {
+  // 恢复文件复用正式分片上传 API，即使目标是 Cloudflare 也不会绕过配额和对象状态机。
   const bytes = new Uint8Array(await readFile(filePath));
   const create = await remoteFetch("/api/uploads", {
     method: "POST",
@@ -123,6 +128,7 @@ export async function remoteRestore(sourceArgument?: string): Promise<void> {
   if (manifest.format !== "drop-worker-portable-backup" || manifest.version !== 1) {
     throw new Error("可移植备份格式不受支持");
   }
+  // 恢复前并行确认目标的活动区和回收站都为空，避免把内容混入已有实例。
   const [active, trash] = await Promise.all([
     remoteFetch("/api/items?limit=1&trash=false").then((response) => response.json() as Promise<ListItemsResponse>),
     remoteFetch("/api/items?limit=1&trash=true").then((response) => response.json() as Promise<ListItemsResponse>),
@@ -145,6 +151,7 @@ export async function remoteRestore(sourceArgument?: string): Promise<void> {
     } else {
       if (!item.backupFile) throw new Error(`文件条目 ${item.id} 缺少备份文件`);
       const backupPath = safeManifestPath(source, item.backupFile);
+      // 每个文件恢复前都重新校验大小和摘要，防止备份目录在生成后被篡改。
       if (!item.backupSha256 || (await hashFile(backupPath)) !== item.backupSha256) {
         throw new Error(`文件条目 ${item.id} 完整性校验失败`);
       }
@@ -194,6 +201,7 @@ async function main(): Promise<void> {
   const dataRoot = resolve(process.cwd(), process.env.DATA_DIR || "./data");
   const databasePath = resolve(dataRoot, "drop-worker.sqlite");
   if (command === "backup") {
+    // 本地备份先 checkpoint WAL，再复制 SQLite 和对象目录，并为每个文件生成清单摘要。
     const destination = resolve(argument || `./backups/drop-worker-${Date.now()}`);
     await mkdir(destination, { recursive: false });
     const database = new DatabaseSync(databasePath);
@@ -240,6 +248,7 @@ async function main(): Promise<void> {
     if ((await hashFile(resolve(source, "drop-worker.sqlite"))) !== manifest.databaseSha256) {
       throw new Error("数据库备份完整性校验失败");
     }
+    // 先验证清单中所有对象，再检查目标数据库不存在；任何一步失败都不会开始写入恢复数据。
     for (const file of manifest.files) {
       const path = safeManifestPath(source, file.path);
       const info = await stat(path);

@@ -58,6 +58,7 @@ const PART_SIZE = 8 * 1024 * 1024;
 const UPLOAD_STORAGE_KEY = "drop-worker.pending-uploads";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  // 所有前端 API 调用统一在这里处理 JSON 请求头和结构化错误，业务函数只关心成功数据。
   const response = await fetch(path, {
     ...init,
     headers: {
@@ -114,6 +115,7 @@ function fileFingerprint(file: File): string {
 }
 
 function readSavedUploads(): UploadTask[] {
+  // localStorage 只保存可恢复任务的轻量元数据，不保存文件正文；刷新页面后任务先进入 paused。
   try {
     const value: unknown = JSON.parse(localStorage.getItem(UPLOAD_STORAGE_KEY) || "[]");
     return Array.isArray(value) ? (value as UploadTask[]) : [];
@@ -123,6 +125,7 @@ function readSavedUploads(): UploadTask[] {
 }
 
 function saveUploads(tasks: UploadTask[]): void {
+  // 已失败且从未开始的任务没有恢复价值，过滤掉以免队列永久膨胀。
   localStorage.setItem(
     UPLOAD_STORAGE_KEY,
     JSON.stringify(tasks.filter((task) => task.status !== "failed" || task.progress > 0)),
@@ -130,6 +133,7 @@ function saveUploads(tasks: UploadTask[]): void {
 }
 
 async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
+  // 分片网络请求最多重试三次，并用指数退避减少短暂故障期间的并发压力。
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -167,6 +171,7 @@ export function DropApp() {
   const refreshVersion = useRef(0);
 
   useEffect(() => {
+    // 首屏只做一次浏览器侧初始化：主题、断点续传队列、分享参数和 Service Worker。
     const storedTheme = (localStorage.getItem("drop-worker.theme") as Theme | null) || "system";
     document.documentElement.dataset.theme = storedTheme;
     queueMicrotask(() => {
@@ -232,12 +237,14 @@ export function DropApp() {
       const current = ++refreshVersion.current;
       if (!quiet) setLoading(true);
       try {
+        // 列表和存储摘要并行加载；current 防止较慢的旧请求覆盖用户刚切换筛选条件后的新结果。
         const [list, summary] = await Promise.all([
           api<ListItemsResponse>(`/api/items?${listParams()}`),
           api<StorageSummary>("/api/storage"),
         ]);
         if (current !== refreshVersion.current) return;
         if (preserveLoaded) {
+          // 后台轮询只把新数据置于顶部，保留用户已经滚动加载的旧页，避免页面跳动。
           setItems((previous) => {
             const fresh = new Set(list.items.map((item) => item.id));
             return [...list.items, ...previous.filter((item) => !fresh.has(item.id))];
@@ -261,6 +268,7 @@ export function DropApp() {
     if (nextCursor === null || loadingMore) return;
     setLoadingMore(true);
     try {
+      // 使用服务端返回的 offset cursor 追加下一页，并按 id 去重，兼容轮询和翻页同时发生。
       const list = await api<ListItemsResponse>(`/api/items?${listParams(nextCursor)}`);
       setItems((previous) => {
         const existing = new Set(previous.map((item) => item.id));
@@ -275,6 +283,7 @@ export function DropApp() {
   };
 
   useEffect(() => {
+    // 认证状态变化后异步加载，避免在 render 阶段触发请求；清理 timer 防止卸载后更新状态。
     const timer = window.setTimeout(() => {
       void loadAuth().finally(() => setLoading(false));
     }, 0);
@@ -288,6 +297,7 @@ export function DropApp() {
   }, [auth?.authenticated, loadData]);
 
   useEffect(() => {
+    // 已登录时每 5 秒静默刷新，保持跨设备投递的时间流近实时，同时不打断用户当前视图。
     if (!auth?.authenticated) return;
     const timer = window.setInterval(() => void loadData(true), 5000);
     return () => window.clearInterval(timer);
@@ -303,6 +313,7 @@ export function DropApp() {
     ids: string[],
     action: "trash" | "restore" | "purge",
   ) => {
+    // 收藏项需要二次确认，永久删除需要明确确认；服务端仍会按 ownerId 再做权限和状态校验。
     if (action === "trash" && items.some((item) => ids.includes(item.id) && item.favorite)) {
       if (!window.confirm("所选内容包含收藏项，仍要移入回收站吗？")) return;
     }
@@ -347,6 +358,7 @@ export function DropApp() {
     const fingerprint = fileFingerprint(file);
     let session: UploadSession;
     try {
+      // 有 existing 时先读取服务端任务，否则创建新 multipart 会话；两条路径最后汇合到同一上传循环。
       if (existing) {
         session = await api<UploadSession>(`/api/uploads/${existing.id}`);
       } else {
@@ -376,6 +388,7 @@ export function DropApp() {
       ]);
       const completedParts = new Map(session.parts.map((part) => [part.partNumber, part]));
       const partCount = Math.ceil(file.size / PART_SIZE);
+      // 逐片跳过服务端已经确认的 partNumber，实现刷新/换设备后的断点续传。
       for (let index = 0; index < partCount; index += 1) {
         const partNumber = index + 1;
         if (completedParts.has(partNumber)) continue;
@@ -395,6 +408,7 @@ export function DropApp() {
           ),
         );
       }
+      // 所有分片都确认后才调用 complete；完成失败会保留任务状态，下一次可以继续重试。
       await api<DropItem>(`/api/uploads/${session.id}/complete`, { method: "POST", body: "{}" });
       setUploads((current) => current.filter((task) => task.id !== session.id));
       showNotice(`${file.name} 已上传`);
@@ -412,6 +426,7 @@ export function DropApp() {
 
   const submitComposer = async (text: string, resetText: () => void) => {
     try {
+      // 文本/链接先创建元数据，随后按选择顺序上传文件；任一失败都会保留对应上传任务。
       if (text.trim()) await createEntry(text);
       for (const file of pendingFiles) await uploadFile(file);
       resetText();
@@ -442,6 +457,7 @@ export function DropApp() {
   const emptyTrash = async () => {
     if (!window.confirm("清空回收站中的全部内容？此操作无法撤销。")) return;
     try {
+      // 先分页收集完整回收站，再按 API 的 100 条上限分批永久删除，避免遗漏超过第一页的内容。
       const ids: string[] = [];
       let cursor: number | null = 0;
       while (cursor !== null) {
@@ -466,6 +482,7 @@ export function DropApp() {
   };
 
   const visibleItems = useMemo(() => {
+    // 存储清理视图在服务端“最大文件”排序结果上追加年龄和大小的本地筛选。
     if (view !== "cleanup") return items;
     const ageDays = cleanupAge === "all" ? null : Number(cleanupAge);
     const minimumBytes = cleanupSize === "all" ? 0 : Number(cleanupSize) * 1024 * 1024;
@@ -477,6 +494,7 @@ export function DropApp() {
   }, [cleanupAge, cleanupSize, clock, items, view]);
 
   const duplicateIds = useMemo(() => {
+    // 疑似重复只用于提示，不自动删除：文件名和大小相同不代表内容一定相同。
     const groups = new Map<string, string[]>();
     for (const item of items) {
       if (item.type !== "file") continue;
@@ -772,10 +790,12 @@ function Composer({
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const addFiles = (files: File[]) => {
+    // 拖拽、粘贴和文件选择器共用入口；这里只过滤单文件上限，最终仍由 API 再次校验。
     const valid = files.filter((file) => file.size <= 500 * 1024 * 1024);
     onFiles([...pendingFiles, ...valid]);
   };
   const submit = async () => {
+    // 发送期间锁定按钮，避免重复创建文本条目或重复启动同一批上传。
     if ((!text.trim() && pendingFiles.length === 0) || sending) return;
     setSending(true);
     await onSubmit(text, () => setText(""));
@@ -917,6 +937,7 @@ function ItemEntry({
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
   const save = async () => {
+    // 三种条目共享编辑入口，但可编辑字段不同：文件改显示名，链接改标题，文本改正文。
     const changes = item.type === "file" ? { displayName: draft } : item.type === "link" ? { title: draft } : { content: draft };
     await onUpdate(item.id, changes);
     setEditing(false);
@@ -1069,6 +1090,7 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus | null; onAut
     setBusy(true);
     setError(null);
     try {
+      // 登录状态机：密码模式直接登录；OTP 模式第一次发送验证码，第二次提交验证码；平台模式刷新身份。
       if (auth.mode === "password") {
         await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
         await onAuthenticated();

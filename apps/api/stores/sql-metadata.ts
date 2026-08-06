@@ -60,6 +60,7 @@ const UPLOAD_COLUMNS = `id, owner_id, object_key, provider_upload_id, file_name,
   mime_type, size_bytes, fingerprint, parts_json, status, created_at,
   updated_at, expires_at`;
 
+// 数据库列名使用 snake_case，API 契约使用 camelCase；转换集中在这里，避免适配层和路由各自映射。
 function itemFromRow(row: ItemRow): StoredItem {
   return {
     id: row.id,
@@ -99,6 +100,8 @@ function publicItem(item: StoredItem): DropItem {
 function uploadFromRow(row: UploadRow): UploadRecord {
   let parts: UploadedPart[] = [];
   try {
+    // parts_json 是为了让 D1 和 SQLite 共享同一套表结构；损坏时按空分片处理，
+    // 让清理任务仍能回收会话，而不是让单行坏数据阻塞整个列表查询。
     const parsed: unknown = JSON.parse(row.parts_json);
     if (Array.isArray(parsed)) parts = parsed as UploadedPart[];
   } catch {
@@ -134,10 +137,12 @@ export class SqlMetadataStore implements MetadataStore {
     if (!this.autoCreateSchema) {
       throw new Error("数据库架构尚未迁移，请先应用正式迁移");
     }
+    // 本地开发允许按需建表；Cloudflare 适配器关闭该开关，生产必须显式执行正式迁移。
     await this.sql.batch(schemaStatements.map((sql) => ({ sql })));
   }
 
   async listItems(ownerId: string, options: ListOptions) {
+    // 过滤条件全部进入参数绑定，只有预先固定的排序片段允许拼接进 SQL。
     const clauses = ["owner_id = ?", options.trash ? "deleted_at > 0" : "deleted_at IS NULL"];
     const params: SqlValue[] = [ownerId];
     if (options.type) {
@@ -166,6 +171,7 @@ export class SqlMetadataStore implements MetadataStore {
        ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       params,
     );
+    // 多取一行判断是否还有下一页；返回的 cursor 使用 offset，保持前端续读逻辑简单。
     const hasMore = rows.length > options.limit;
     const selected = hasMore ? rows.slice(0, options.limit) : rows;
     return {
@@ -234,6 +240,7 @@ export class SqlMetadataStore implements MetadataStore {
     id: string,
     changes: { content?: string; title?: string; displayName?: string; favorite?: boolean },
   ): Promise<StoredItem | null> {
+    // 只拼接调用方实际提供的字段，值仍然通过参数绑定传入，避免动态 UPDATE 产生注入面。
     const sets: string[] = [];
     const params: SqlValue[] = [];
     if (changes.content !== undefined) {
@@ -274,6 +281,7 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async beginPurge(ownerId: string, id: string): Promise<StoredItem | null> {
+    // 正数 deleted_at 表示回收站，负数表示已获得删除租约；ABS 保留原删除时间用于审计/筛选。
     await this.sql.run(
       `UPDATE items SET deleted_at = -ABS(deleted_at), updated_at = ?
        WHERE owner_id = ? AND id = ? AND deleted_at IS NOT NULL`,
@@ -294,6 +302,7 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async storageSummary(ownerId: string, quotaBytes: number): Promise<StorageSummary> {
+    // 这些统计相互独立，使用 Promise.all 并行读取；reserved_bytes 还包括正在上传的预留空间。
     const [usage, reserved, largestFile, oldestItem] = await Promise.all([
       this.sql.first<{
         used_bytes: number | null;
@@ -379,6 +388,7 @@ export class SqlMetadataStore implements MetadataStore {
     expiresAt: number;
   }, quotaBytes: number): Promise<UploadRecord | null> {
     const id = crypto.randomUUID();
+    // 配额检查和 INSERT 放在同一条条件 INSERT 中：并发上传时由数据库决定谁能成功预留空间。
     const result = await this.sql.run(
       `INSERT INTO uploads (
         id, owner_id, object_key, provider_upload_id, file_name, mime_type,
@@ -427,6 +437,7 @@ export class SqlMetadataStore implements MetadataStore {
     const nextParts = [...upload.parts.filter((value) => value.partNumber !== part.partNumber), part].sort(
       (a, b) => a.partNumber - b.partNumber,
     );
+    // 先移除相同 partNumber 再排序，使分片重试成为幂等更新，并保证完成时按编号拼接。
     await this.sql.run(
       `UPDATE uploads SET parts_json = ?, updated_at = ?
        WHERE owner_id = ? AND id = ? AND status = 'uploading'`,
@@ -441,6 +452,8 @@ export class SqlMetadataStore implements MetadataStore {
     if (upload.status === "completed") return this.getItem(ownerId, id);
     if (upload.status !== "uploading") return null;
     const now = Date.now();
+    // 元数据落库也分两步放进同一个 batch：先生成 file 条目，再释放上传中的状态。
+    // 两步要么一起提交，要么一起回滚，避免出现“文件可见但配额仍被预留”的中间态。
     await this.sql.batch([
       {
         sql: `INSERT OR IGNORE INTO items (
@@ -468,6 +481,7 @@ export class SqlMetadataStore implements MetadataStore {
     const upload = await this.getUpload(ownerId, id);
     const pendingStatus = finalStatus === "cancelled" ? "cancelling" : "expiring";
     if (!upload || (upload.status !== "uploading" && upload.status !== pendingStatus)) return null;
+    // 把 uploading 转为 pending 状态相当于领取清理租约；已领取的任务可被下一轮继续处理。
     await this.sql.run(
       `UPDATE uploads SET status = ?, updated_at = ?
        WHERE owner_id = ? AND id = ? AND status IN ('uploading', ?)`,
@@ -484,6 +498,7 @@ export class SqlMetadataStore implements MetadataStore {
     const pendingStatus = finalStatus === "cancelled" ? "cancelling" : "expiring";
     const upload = await this.getUpload(ownerId, id);
     if (!upload || upload.status !== pendingStatus) return null;
+    // 外部对象删除成功后才落最终状态，避免数据库“已取消”但对象仍占用空间。
     await this.sql.run(
       "UPDATE uploads SET status = ?, updated_at = ? WHERE owner_id = ? AND id = ? AND status = ?",
       [finalStatus, Date.now(), ownerId, id, pendingStatus],
@@ -492,6 +507,7 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async listExpiredUploads(now: number): Promise<UploadRecord[]> {
+    // 同时返回处理中状态，支持上一次清理在外部调用失败后的重试。
     const rows = await this.sql.all<UploadRow>(
       `SELECT ${UPLOAD_COLUMNS} FROM uploads
        WHERE status IN ('cancelling', 'expiring')
@@ -502,6 +518,7 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async listExpiredTrash(before: number): Promise<StoredItem[]> {
+    // 负数是上次已领取但未完成的删除任务，正数则按回收站保留期筛选。
     const rows = await this.sql.all<ItemRow>(
       `SELECT ${ITEM_COLUMNS} FROM items
        WHERE deleted_at < 0 OR (deleted_at > 0 AND deleted_at <= ?) LIMIT 200`,

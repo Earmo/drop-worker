@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+      - name: 准备验证配置
+        run: cp wrangler.example.jsonc wrangler.jsonc
       - name: 安装 Node.js
         uses: actions/setup-node@v7
         with:
@@ -41,6 +43,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: production
     needs: validate
     runs-on: ubuntu-latest
     steps:
@@ -53,10 +56,66 @@ jobs:
           cache: npm
       - name: 安装依赖
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: 生成生产 Wrangler 配置
+        id: wrangler-config
+        run: node scripts/render-wrangler-config.mjs wrangler.jsonc
+        env:
+          WORKER_NAME: ${{ vars.WORKER_NAME }}
+          D1_DATABASE_NAME: ${{ vars.D1_DATABASE_NAME }}
+          D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
+          R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
+          AUTH_EMAIL_PROVIDER: ${{ vars.AUTH_EMAIL_PROVIDER }}
+          MAX_STORAGE_BYTES: ${{ vars.MAX_STORAGE_BYTES }}
+          OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
+          AUTH_FROM_EMAIL: ${{ secrets.AUTH_FROM_EMAIL }}
+          AUTH_FROM_NAME: ${{ vars.AUTH_FROM_NAME }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_SECURE: ${{ vars.SMTP_SECURE }}
+          SMTP_FROM: ${{ secrets.SMTP_FROM }}
+          SMTP_TIMEOUT_MS: ${{ vars.SMTP_TIMEOUT_MS }}
+          CF_ACCESS_TEAM_DOMAIN: ${{ vars.CF_ACCESS_TEAM_DOMAIN }}
+          CF_ACCESS_AUD: ${{ vars.CF_ACCESS_AUD }}
+      - name: 检查 Worker Secret
+        env:
+          EMAIL_PROVIDER: ${{ steps.wrangler-config.outputs.email_provider }}
+          AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          if [ ${#AUTH_SESSION_SECRET} -lt 32 ]; then
+            echo "::error::AUTH_SESSION_SECRET 必须至少包含 32 个字符。"
+            exit 1
+          fi
+          if [ "$EMAIL_PROVIDER" = "smtp" ] && { [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ]; }; then
+            echo "::error::SMTP 模式必须配置 SMTP_USERNAME 和 SMTP_PASSWORD。"
+            exit 1
+          fi
       - name: 构建
         run: npm run build
-      - name: 部署 Worker
-        run: npx wrangler deploy --config wrangler.jsonc
+      - name: 部署 Worker（Cloudflare Email Service）
+        if: steps.wrangler-config.outputs.email_provider != 'smtp'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.jsonc
+          secrets: |
+            AUTH_SESSION_SECRET
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
+      - name: 部署 Worker（自定义 SMTP）
+        if: steps.wrangler-config.outputs.email_provider == 'smtp'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.jsonc
+          secrets: |
+            AUTH_SESSION_SECRET
+            SMTP_USERNAME
+            SMTP_PASSWORD
+        env:
+          AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}

@@ -34,6 +34,9 @@ yarn-error.log*
 .env*
 !.env.example
 
+# local Cloudflare deployment configuration (use wrangler.example.jsonc as the template)
+/wrangler.jsonc
+
 # vercel
 .vercel
 

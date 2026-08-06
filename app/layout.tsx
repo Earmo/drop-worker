@@ -15,6 +15,7 @@ const geistMono = Geist_Mono({
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
+  // 反向代理会转发原始 Host/Proto；使用它们生成正确的 canonical、OG 图片和 manifest URL。
   const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host") || "localhost:3000";
   const protocol = requestHeaders.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
   const base = new URL(`${protocol}://${host}`);

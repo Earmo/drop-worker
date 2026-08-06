@@ -74,6 +74,7 @@ function authError(code: string, message: string, status: 400 | 401 | 429 = 400)
 }
 
 export function createPasswordHash(password: string): string {
+  // 密码只在管理命令中生成一次；盐值和 scrypt 参数写进格式，便于未来校验时复现算法。
   if (password.length < 12) throw new Error("密码至少需要 12 个字符");
   const salt = randomBytes(16);
   const key = scryptSync(password, salt, 64, { N: 32_768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 });
@@ -81,6 +82,7 @@ export function createPasswordHash(password: string): string {
 }
 
 function verifyPassword(password: string, stored: string): boolean {
+  // 从存储值读取算法参数，而不是依赖当前默认值；最终比较使用 timingSafeEqual。
   const [algorithm, n, r, p, saltValue, keyValue] = stored.split("$");
   if (algorithm !== "scrypt" || !n || !r || !p || !saltValue || !keyValue) return false;
   const expected = Buffer.from(keyValue, "base64url");
@@ -103,6 +105,7 @@ export class LocalAuth {
   ) {
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA journal_mode = WAL");
+    // 本地模式启动时确保表存在；Cloudflare 模式则要求单独应用正式迁移。
     for (const statement of schemaStatements) this.database.prepare(statement).run();
     this.ownerId = `local:${sha256(normalizedEmail(config.email)).slice(0, 24)}`;
   }
@@ -112,6 +115,7 @@ export class LocalAuth {
   }
 
   async resolveIdentity(request: Request): Promise<Identity | null> {
+    // Cookie 只作为索引，数据库校验哈希和过期时间后才返回 owner 身份。
     const token = cookieValue(request, SESSION_COOKIE);
     if (!token) return null;
     const row = this.database
@@ -125,6 +129,7 @@ export class LocalAuth {
   }
 
   async handle(request: Request): Promise<Response | null> {
+    // 本地同时支持密码和邮箱验证码，但每个实例仍只启用配置中的一种 mode。
     const url = new URL(request.url);
     if (url.pathname === "/api/auth/login" && request.method === "POST") {
       return this.loginWithPassword(request);
@@ -142,6 +147,7 @@ export class LocalAuth {
   }
 
   private async loginWithPassword(request: Request): Promise<Response> {
+    // 先检查模式，再同时验证邮箱和密码；对外使用同一错误，避免暴露哪一项不匹配。
     if (this.config.mode !== "password" || !this.config.passwordHash) {
       return authError("AUTH_MODE_MISMATCH", "当前未启用密码登录");
     }
@@ -158,6 +164,7 @@ export class LocalAuth {
   }
 
   private async requestOtp(request: Request): Promise<Response> {
+    // OTP 流程：校验唯一邮箱 -> 写入带过期时间的挑战 -> 通过本地 SMTP 发送验证码。
     if (this.config.mode !== "smtp-otp" || !this.config.smtp) {
       return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
     }
@@ -195,6 +202,7 @@ export class LocalAuth {
   }
 
   private async verifyOtp(request: Request): Promise<Response> {
+    // 验证码最多尝试 5 次且 10 分钟过期；每次比对前先递增次数，防止并发重试绕过限制。
     if (this.config.mode !== "smtp-otp") {
       return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
     }
@@ -227,10 +235,12 @@ export class LocalAuth {
       return authError("INVALID_CODE", "验证码无效或已过期", 401);
     }
     this.database.prepare("DELETE FROM auth_challenges WHERE id = ?").run(row.id);
+    // 通过后删除挑战并签发 30 天会话，后续请求只需验证 Cookie，不必重复发信。
     return this.createSession();
   }
 
   private createSession(): Response {
+    // 服务端保存 token 哈希，浏览器拿到的原始 token 只存在 HttpOnly Cookie 中。
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();
     this.database
@@ -258,6 +268,7 @@ export class LocalAuth {
   }
 
   private async logout(request: Request): Promise<Response> {
+    // 删除服务端会话与清空 Cookie 都是幂等操作，重复点击退出不会产生错误。
     const token = cookieValue(request, SESSION_COOKIE);
     if (token) {
       this.database.prepare("DELETE FROM local_sessions WHERE token_hash = ?").run(sha256(token));
@@ -275,6 +286,7 @@ export class LocalAuth {
 }
 
 export function localAuthConfigFromEnv(): LocalAuthConfig {
+  // 环境变量在进程启动时集中解析和校验，避免运行中才发现 HTTP、SMTP 或密钥配置错误。
   const mode = process.env.AUTH_MODE === "smtp-otp" ? "smtp-otp" : "password";
   const email = process.env.ADMIN_EMAIL?.trim();
   if (!email) throw new Error("缺少 ADMIN_EMAIL");
