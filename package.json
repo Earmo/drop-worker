@@ -11,7 +11,7 @@
     "start": "tsx server/local.ts",
     "start:cloudflare": "vinext start",
     "test": "npm run typecheck && npm run test:unit && npm run build && npm run test:render",
-    "test:unit": "node --import tsx --test tests/api.test.ts tests/auth.test.ts tests/migration.test.ts",
+    "test:unit": "node --import tsx --test tests/api.test.ts tests/auth.test.ts tests/migration.test.ts tests/render-wrangler-config.test.mjs",
     "test:render": "node --test tests/rendered-html.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

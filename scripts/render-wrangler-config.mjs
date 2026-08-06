@@ -1,6 +1,8 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+const SUPPORTED_SMTP_PORTS = ["465", "587", "994"];
+
 function readValue(name, fallback = "") {
   return (process.env[name] ?? fallback).trim();
 }
@@ -47,8 +49,8 @@ if (!/^\d+$/.test(smtpTimeoutMs) || Number(smtpTimeoutMs) < 3000 || Number(smtpT
 if (emailProvider === "cloudflare" && !authFromEmail) {
   throw new Error("Cloudflare Email Service 模式缺少 AUTH_FROM_EMAIL");
 }
-if (emailProvider === "smtp" && (!smtpHost || !["465", "587"].includes(smtpPort))) {
-  throw new Error("SMTP 模式必须提供 SMTP_HOST，并使用 465 或 587 端口");
+if (emailProvider === "smtp" && (!smtpHost || !SUPPORTED_SMTP_PORTS.includes(smtpPort))) {
+  throw new Error(`SMTP 模式必须提供 SMTP_HOST，并使用 ${SUPPORTED_SMTP_PORTS.join("、")} 端口`);
 }
 if (emailProvider === "smtp" && !smtpFrom && !authFromEmail) {
   throw new Error("SMTP 模式必须提供 SMTP_FROM 或 AUTH_FROM_EMAIL");

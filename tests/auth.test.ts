@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createPasswordHash, LocalAuth } from "../server/local-auth";
+import { CloudflareEmailAuth } from "../worker/email-auth";
 
 test("本地密码登录创建 30 天会话并支持退出", async () => {
   const root = await mkdtemp(join(tmpdir(), "drop-worker-auth-"));
@@ -51,4 +52,23 @@ test("本地密码登录创建 30 天会话并支持退出", async () => {
     auth.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Cloudflare SMTP 接受 994 端口的隐式 TLS 配置", () => {
+  const env = {
+    AUTH_SESSION_SECRET: "a-secure-session-secret-that-is-long-enough",
+    AUTH_EMAIL_PROVIDER: "smtp",
+    OWNER_EMAIL: "owner@example.com",
+    AUTH_FROM_EMAIL: "",
+    AUTH_FROM_NAME: "Drop Worker",
+    SMTP_HOST: "smtphz.qiye.163.com",
+    SMTP_PORT: "994",
+    SMTP_SECURE: "true",
+    SMTP_FROM: "owner@example.com",
+    SMTP_TIMEOUT_MS: "15000",
+    SMTP_USERNAME: "owner@example.com",
+    SMTP_PASSWORD: "smtp-app-password",
+  } as unknown as Env;
+
+  assert.doesNotThrow(() => new CloudflareEmailAuth(env));
 });

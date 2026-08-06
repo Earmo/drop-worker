@@ -128,8 +128,8 @@ function expect(response: SmtpResponse, codes: number[], context: string): void 
 }
 
 export async function sendSmtpMessage(config: SmtpConfig, message: SmtpMessage): Promise<void> {
-  // Workers Socket 不允许连接 25 端口；只接受 465 隐式 TLS 或 587 明文后升级 STARTTLS。
-  if (config.port === 25) throw new Error("Cloudflare Workers 禁止连接 SMTP 25 端口，请使用 465 或 587");
+  // Workers Socket 不允许连接 25 端口；支持 465/994 隐式 TLS 或 587 明文后升级 STARTTLS。
+  if (config.port === 25) throw new Error("Cloudflare Workers 禁止连接 SMTP 25 端口，请使用 465、587 或 994");
   const { connect } = await import("cloudflare:sockets");
   const socket = connect(
     { hostname: config.host, port: config.port },

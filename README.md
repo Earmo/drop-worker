@@ -157,7 +157,7 @@ npm run cf:deploy
 
 ### Cloudflare 自定义 SMTP
 
-如果不使用 Cloudflare Email Service，可以切换为自定义 SMTP。Cloudflare Workers 的 TCP Socket 不允许连接 25 端口，因此 SMTP 必须使用 465（隐式 TLS）或 587（STARTTLS）：
+如果不使用 Cloudflare Email Service，可以切换为自定义 SMTP。Cloudflare Workers 的 TCP Socket 不允许连接 25 端口，因此 SMTP 使用 465/994（隐式 TLS）或 587（STARTTLS）：
 
 ```jsonc
 {
@@ -210,7 +210,7 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `AUTH_EMAIL_PROVIDER` | `cloudflare` 或 `smtp` | `cloudflare` |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
 | `AUTH_FROM_NAME` | 邮件显示的发件人名称 | Worker 名称 |
-| `SMTP_PORT` | SMTP 端口，只能是 465 或 587 | `587` |
+| `SMTP_PORT` | SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS） | `587` |
 | `SMTP_SECURE` | 是否使用隐式 TLS | `false` |
 | `SMTP_TIMEOUT_MS` | SMTP 超时毫秒数 | `15000` |
 | `CF_ACCESS_TEAM_DOMAIN` | 可选的 Cloudflare Access 团队域名 | 空 |

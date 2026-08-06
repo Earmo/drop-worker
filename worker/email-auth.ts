@@ -6,6 +6,7 @@ const SESSION_SECONDS = 30 * 24 * 60 * 60;
 const CHALLENGE_SECONDS = 10 * 60;
 const RESEND_SECONDS = 60;
 const MAX_ATTEMPTS = 5;
+const SUPPORTED_SMTP_PORTS = new Set([465, 587, 994]);
 
 type SessionRow = {
   owner_id: string;
@@ -172,14 +173,19 @@ export class CloudflareEmailAuth {
       ? {
           host: smtpHost,
           port: smtpPort,
-          secure: env.SMTP_SECURE === "true" || smtpPort === 465,
+          secure: env.SMTP_SECURE === "true" || smtpPort === 465 || smtpPort === 994,
           username: env.SMTP_USERNAME || "",
           password: env.SMTP_PASSWORD || "",
           timeoutMs: Math.min(Math.max(Number(env.SMTP_TIMEOUT_MS || 15_000), 3_000), 30_000),
         }
       : null;
     // 配置在 Worker 初始化时一次性校验，避免请求处理中途才发现无法发信或无法签发会话。
-    if (!this.email || !this.fromEmail || !env.AUTH_SESSION_SECRET || (this.provider === "smtp" && (!this.smtp?.host || ![465, 587].includes(this.smtp.port)))) {
+    if (
+      !this.email ||
+      !this.fromEmail ||
+      !env.AUTH_SESSION_SECRET ||
+      (this.provider === "smtp" && (!this.smtp?.host || !SUPPORTED_SMTP_PORTS.has(this.smtp.port)))
+    ) {
       throw new Error("邮箱验证码认证配置不完整");
     }
   }

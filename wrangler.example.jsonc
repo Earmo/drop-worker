@@ -67,9 +67,9 @@
     "AUTH_FROM_NAME": "Drop Worker",
     // 自定义 SMTP 服务器地址；AUTH_EMAIL_PROVIDER 为 smtp 时必填。
     "SMTP_HOST": "",
-    // SMTP 端口，只支持 465（隐式 TLS）或 587（STARTTLS）。
+    // SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS）。
     "SMTP_PORT": "587",
-    // 是否使用隐式 TLS；465 通常设为 true，587 通常设为 false 并使用 STARTTLS。
+    // 是否使用隐式 TLS；465/994 通常设为 true，587 通常设为 false 并使用 STARTTLS。
     "SMTP_SECURE": "false",
     // 自定义 SMTP 的实际发件地址；留空时回退到 AUTH_FROM_EMAIL。
     "SMTP_FROM": "",
