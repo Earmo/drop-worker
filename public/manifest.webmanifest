@@ -1,6 +1,6 @@
 {
-  "name": "drop-worker",
-  "short_name": "drop-worker",
+  "name": "Drop Worker",
+  "short_name": "Drop Worker",
   "description": "私有、跨设备的文本、链接与文件投递箱。",
   "start_url": "/",
   "display": "standalone",

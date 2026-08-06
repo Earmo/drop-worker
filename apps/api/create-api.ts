@@ -1,61 +1,24 @@
 import { Hono } from "hono";
-import { z } from "zod";
 import {
+  bulkActionSchema,
   createLinkSchema,
   createTextSchema,
   listItemsQuerySchema,
   updateItemSchema,
   uploadCreateSchema,
-  type ApiError,
   type ExportBundle,
 } from "../../packages/contracts";
-import type { Identity, RuntimeServices } from "./platform";
+import {
+  errorResponse,
+  installIdentityMiddleware,
+  installRequestMiddleware,
+  parseJson,
+  ApiEnv
+} from "./http";
+import type { RuntimeServices } from "./platform";
 
-type Bindings = { services: RuntimeServices };
-type Variables = { identity: Identity; requestId: string };
-
-const api = new Hono<{ Bindings: Bindings; Variables: Variables }>();
-// 批量操作故意限制为 200 个 ID，避免一次请求把数据库、对象存储和响应都推入不可控的规模。
-const bulkActionSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(200),
-  action: z.enum(["trash", "restore", "purge"]),
-});
-
-function errorResponse(
-  requestId: string,
-  code: string,
-  message: string,
-  status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500,
-) {
-  return Response.json(
-    { error: { code, message, requestId } } satisfies ApiError,
-    { status },
-  );
-}
-
-async function parseJson(request: Request): Promise<unknown> {
-  // API 只接受小型元数据 JSON；文件正文走分片上传接口，避免把大请求读入内存。
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > 128 * 1024) throw new Error("JSON 请求过大");
-  return request.json();
-}
-
-api.use("/api/*", async (c, next) => {
-  // 所有 API 共享一个请求 ID：返回给客户端用于排障，同时写入错误日志便于串联请求。
-  const requestId = crypto.randomUUID();
-  c.set("requestId", requestId);
-  c.header("x-request-id", requestId);
-
-  const method = c.req.method.toUpperCase();
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    // 浏览器修改数据时必须带同源 Origin；读取请求不依赖 Origin，方便下载和健康检查。
-    const origin = c.req.header("origin");
-    if (origin && origin !== new URL(c.req.url).origin) {
-      return errorResponse(requestId, "INVALID_ORIGIN", "请求来源不受信任", 403);
-    }
-  }
-  await next();
-});
+const api = new Hono<ApiEnv>();
+installRequestMiddleware(api);
 
 api.get("/api/health", (c) =>
   c.json({ status: "ok", name: "drop-worker", time: new Date().toISOString() }),
@@ -77,17 +40,7 @@ api.all("/api/auth/*", async (c) => {
   return response ?? errorResponse(c.get("requestId"), "NOT_FOUND", "认证操作不存在", 404);
 });
 
-api.use("/api/*", async (c, next) => {
-  // 认证中间件位于所有业务路由之前，确保 ownerId 来自服务端会话而不是客户端参数。
-  const identity = await c.env.services.resolveIdentity(c.req.raw);
-  if (!identity) {
-    return errorResponse(c.get("requestId"), "UNAUTHENTICATED", "请先登录", 401);
-  }
-  c.set("identity", identity);
-  await c.env.services.metadata.ensureSchema();
-  c.set("identity", identity);
-  await next();
-});
+installIdentityMiddleware(api);
 
 api.get("/api/items", async (c) => {
   const parsed = listItemsQuerySchema.safeParse(c.req.query());

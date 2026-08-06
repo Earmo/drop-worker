@@ -22,20 +22,20 @@ export async function generateMetadata(): Promise<Metadata> {
   const description = "私有、跨设备的文本、链接与文件投递箱。";
   return {
     metadataBase: base,
-    title: "drop-worker",
+    title: "Drop Worker",
     description,
-    applicationName: "drop-worker",
+    applicationName: "Drop Worker",
     manifest: "/manifest.webmanifest",
     icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
     openGraph: {
-      title: "drop-worker",
+      title: "Drop Worker",
       description,
       type: "website",
-      images: [{ url: new URL("/og.png", base), width: 1536, height: 1024, alt: "drop-worker" }],
+      images: [{ url: new URL("/og.png", base), width: 1536, height: 1024, alt: "Drop Worker" }],
     },
     twitter: {
       card: "summary_large_image",
-      title: "drop-worker",
+      title: "Drop Worker",
       description,
       images: [new URL("/og.png", base)],
     },

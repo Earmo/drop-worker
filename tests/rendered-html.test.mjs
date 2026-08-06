@@ -13,14 +13,14 @@ async function render() {
   );
 }
 
-test("服务端输出 drop-worker 应用外壳", async () => {
+test("服务端输出 Drop Worker 应用外壳", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>drop-worker<\/title>/i);
+  assert.match(html, /<title>Drop Worker<\/title>/i);
   assert.match(html, /manifest\.webmanifest/);
-  assert.match(html, /drop-worker/);
+  assert.match(html, /Drop Worker/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 

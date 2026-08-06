@@ -49,6 +49,12 @@ export const listItemsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(40),
 });
 
+// 批量操作是公开 API 契约的一部分；限制 ID 数量，避免一次请求放大副作用。
+export const bulkActionSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+  action: z.enum(["trash", "restore", "purge"]),
+});
+
 export const uploadCreateSchema = z.object({
   // 创建上传时只接受文件元数据；文件正文随后按 8 MB 左右的分片发送。
   fileName: z.string().trim().min(1).max(255),

@@ -195,7 +195,7 @@ export class LocalAuth {
     await transport.sendMail({
       from: this.config.smtp.from,
       to: this.config.email,
-      subject: "drop-worker 登录验证码",
+      subject: "Drop Worker 登录验证码",
       text: `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`,
     });
     return Response.json({ challengeId, expiresInSeconds: 600 });

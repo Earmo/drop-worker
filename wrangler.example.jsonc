@@ -64,7 +64,7 @@
     // 验证码邮件的发件地址；使用 Cloudflare Email Service 时必须是已验证域名地址。
     "AUTH_FROM_EMAIL": "noreply@example.com",
     // 验证码邮件显示的发件人名称。
-    "AUTH_FROM_NAME": "drop-worker",
+    "AUTH_FROM_NAME": "Drop Worker",
     // 自定义 SMTP 服务器地址；AUTH_EMAIL_PROVIDER 为 smtp 时必填。
     "SMTP_HOST": "",
     // SMTP 端口，只支持 465（隐式 TLS）或 587（STARTTLS）。

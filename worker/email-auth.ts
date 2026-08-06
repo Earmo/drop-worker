@@ -58,14 +58,14 @@ function base64Utf8(value: string): string {
 }
 
 function headerSafe(value: string): string {
-  return value.replace(/[\r\n"]/g, "").trim() || "drop-worker";
+  return value.replace(/[\r\n"]/g, "").trim() || "Drop Worker";
 }
 
 function otpMime(from: string, fromName: string, to: string, code: string): string {
   // 同时提供 text/plain 和 HTML 两个 MIME part，兼容纯文本邮件客户端。
-  const subject = "drop-worker 登录验证码";
+  const subject = "Drop Worker 登录验证码";
   const text = `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`;
-  const html = `<p>你的 drop-worker 登录验证码是：</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>验证码 10 分钟内有效。若非本人操作，请忽略本邮件。</p>`;
+  const html = `<p>你的 Drop Worker 登录验证码是：</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>验证码 10 分钟内有效。若非本人操作，请忽略本邮件。</p>`;
   const boundary = `drop-worker-${crypto.randomUUID()}`;
   const raw = [
     `From: ${headerSafe(fromName)} <${from}>`,
@@ -164,7 +164,7 @@ export class CloudflareEmailAuth {
   constructor(private readonly env: Env) {
     this.email = normalizedEmail(env.OWNER_EMAIL || "");
     this.fromEmail = normalizedEmail(env.SMTP_FROM || env.AUTH_FROM_EMAIL || "");
-    this.fromName = headerSafe(env.AUTH_FROM_NAME || "drop-worker");
+    this.fromName = headerSafe(env.AUTH_FROM_NAME || "Drop Worker");
     this.provider = env.AUTH_EMAIL_PROVIDER === "smtp" ? "smtp" : "cloudflare";
     const smtpHost = (env.SMTP_HOST || "").trim();
     const smtpPort = Number(env.SMTP_PORT || 587);

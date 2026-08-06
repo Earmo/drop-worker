@@ -113,7 +113,7 @@ cleanupTimer.unref();
 const port = Number(process.env.PORT || 3000);
 const hostname = process.env.HOST || "0.0.0.0";
 const server = serve({ fetch: app.fetch, port, hostname }, (info) => {
-  console.log(`drop-worker 已启动：http://${info.address}:${info.port}`);
+  console.log(`Drop Worker 已启动：http://${info.address}:${info.port}`);
   if (services.insecureHttp) console.warn("警告：当前以不安全 HTTP 模式运行，请勿暴露到公网。");
 });
 

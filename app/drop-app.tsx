@@ -33,7 +33,6 @@ import {
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
-  ApiError,
   AuthStatus,
   DropItem,
   ItemType,
@@ -41,111 +40,22 @@ import type {
   StorageSummary,
   UploadSession,
 } from "../packages/contracts";
+import { api, withRetry } from "./client/api";
+import { formatBytes, formatTime, typeLabel } from "./client/format";
+import {
+  fileFingerprint,
+  PART_SIZE,
+  readSavedUploads,
+  saveUploads,
+  type UploadTask,
+} from "./client/uploads";
 
 type View = "timeline" | "favorites" | "cleanup" | "trash";
 type Theme = "system" | "light" | "dark";
-type UploadTask = {
-  id: string;
-  fileName: string;
-  sizeBytes: number;
-  fingerprint: string;
-  progress: number;
-  status: "waiting" | "uploading" | "paused" | "failed";
-  message?: string;
-};
-
-const PART_SIZE = 8 * 1024 * 1024;
-const UPLOAD_STORAGE_KEY = "drop-worker.pending-uploads";
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  // 所有前端 API 调用统一在这里处理 JSON 请求头和结构化错误，业务函数只关心成功数据。
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      ...(init?.body instanceof Blob ? {} : { "content-type": "application/json" }),
-      ...init?.headers,
-    },
-  });
-  if (!response.ok) {
-    let message = "操作失败，请稍后重试";
-    try {
-      const payload = (await response.json()) as ApiError;
-      message = payload.error?.message || message;
-    } catch {
-      message = response.statusText || message;
-    }
-    throw new Error(message);
-  }
-  return response.json() as Promise<T>;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let amount = value / 1024;
-  let unit = units[0];
-  for (let index = 1; index < units.length && amount >= 1024; index += 1) {
-    amount /= 1024;
-    unit = units[index];
-  }
-  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${unit}`;
-}
-
-function formatTime(value: number): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(value);
-}
-
-function typeLabel(type: ItemType): string {
-  return type === "text" ? "文本" : type === "link" ? "链接" : "文件";
-}
-
 function TypeIcon({ type }: { type: ItemType }) {
   if (type === "text") return <FileText size={17} />;
   if (type === "link") return <Link2 size={17} />;
   return <File size={17} />;
-}
-
-function fileFingerprint(file: File): string {
-  return `${file.name}:${file.size}:${file.lastModified}`;
-}
-
-function readSavedUploads(): UploadTask[] {
-  // localStorage 只保存可恢复任务的轻量元数据，不保存文件正文；刷新页面后任务先进入 paused。
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(UPLOAD_STORAGE_KEY) || "[]");
-    return Array.isArray(value) ? (value as UploadTask[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveUploads(tasks: UploadTask[]): void {
-  // 已失败且从未开始的任务没有恢复价值，过滤掉以免队列永久膨胀。
-  localStorage.setItem(
-    UPLOAD_STORAGE_KEY,
-    JSON.stringify(tasks.filter((task) => task.status !== "failed" || task.progress > 0)),
-  );
-}
-
-async function withRetry<T>(operation: () => Promise<T>): Promise<T> {
-  // 分片网络请求最多重试三次，并用指数退避减少短暂故障期间的并发压力。
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (attempt < 2) {
-        await new Promise((resolve) => window.setTimeout(resolve, 600 * 2 ** attempt));
-      }
-    }
-  }
-  throw lastError;
 }
 
 export function DropApp() {
@@ -742,7 +652,7 @@ function Sidebar({
       <aside className={`sidebar ${open ? "open" : ""}`}>
         <div className="brand-lockup">
           <span className="brand-mark"><ArrowDownToLine size={20} /></span>
-          <div><strong>drop-worker</strong><small>private relay</small></div>
+          <div><strong>Drop Worker</strong><small>private relay</small></div>
         </div>
         <nav className="primary-nav">
           {nav.map(({ value, label, icon: Icon }) => (
@@ -1120,7 +1030,7 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus | null; onAut
       <section className="login-panel">
         <div className="brand-lockup login-brand">
           <span className="brand-mark"><ArrowDownToLine size={21} /></span>
-          <div><strong>drop-worker</strong><small>private relay</small></div>
+          <div><strong>Drop Worker</strong><small>private relay</small></div>
         </div>
         <div className="login-heading"><h1>登录你的投递箱</h1><p>仅允许已配置的个人身份访问。</p></div>
         {!auth ? (

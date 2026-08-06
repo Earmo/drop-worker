@@ -1,6 +1,16 @@
-# drop-worker
+# Drop Worker
 
-`drop-worker` 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。它提供最新优先的时间流、搜索和类型筛选、收藏、回收站、存储清理、500 MB 分片上传与断点续传。
+Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。它提供最新优先的时间流、搜索和类型筛选、收藏、回收站、存储清理、500 MB 分片上传与断点续传。
+
+产品展示名称为 **Drop Worker**；代码目录、npm 包名、Worker 名称、数据库文件名和 API 协议标识继续使用 `drop-worker`，以保持部署和数据兼容性。
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/images/drop-worker-login.png" alt="Drop Worker 登录页" width="75%" /><br />
+  <img src="docs/images/drop-worker-workspace.png" alt="Drop Worker 时间流工作区" width="75%" /><br />
+  <img src="docs/images/drop-worker-cleanup.png" alt="Drop Worker 存储清理" width="75%" />
+</p>
 
 应用支持两种正式部署方式：
 
@@ -157,7 +167,7 @@ npm run cf:deploy
     "SMTP_PORT": "587",
     "SMTP_SECURE": "false",
     "SMTP_FROM": "drop-worker@example.com",
-    "AUTH_FROM_NAME": "drop-worker"
+    "AUTH_FROM_NAME": "Drop Worker"
   }
 }
 ```
@@ -238,11 +248,14 @@ npm test
 
 ## 项目结构
 
-- Web PWA：React、Vinext 和 Vite
-- API：Hono 与共享 Zod 契约
-- Cloudflare 适配：D1、R2、Access/Sites 身份与计划任务
-- 本地适配：Node.js、SQLite、本地文件系统、密码或 SMTP 验证码
-- 数据迁移：Drizzle SQL 迁移
+- `app/`：React/Vinext 页面、布局和主工作区交互。
+- `app/client/`：浏览器 API 客户端、显示格式和断点上传队列持久化。
+- `apps/api/`：与部署平台无关的 Hono 路由、HTTP 中间件和运行时接口。
+- `apps/api/stores/`：D1/R2 与 SQLite/本地文件系统适配器。
+- `packages/contracts/`：前后端共享的 Zod 请求、响应和领域契约。
+- `worker/`：Cloudflare Worker、Email Service、自定义 SMTP 和平台身份适配。
+- `server/`：本地 Node.js 入口、认证、管理和备份迁移命令。
+- `db/` 与 `drizzle/`：共享表结构和正式数据库迁移。
 
 ## 数据与安全边界
 
