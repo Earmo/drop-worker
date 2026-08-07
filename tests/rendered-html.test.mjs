@@ -48,3 +48,9 @@ test("视图筛选切换会清理选择，并使用通用文件选择器", async
   assert.match(app, /type="file"[\s\S]*?accept="\*\/\*"/g);
   assert.equal((app.match(/accept="\*\/\*"/g) || []).length, 2);
 });
+
+test("文本正文使用可选择的文本元素，而不是按钮承载正文", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /<button className=\{`text-content/);
+  assert.match(app, /className=\{`text-content[\s\S]*?role="button"/);
+});

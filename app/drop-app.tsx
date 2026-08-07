@@ -888,9 +888,21 @@ function ItemEntry({
             <div><button onClick={() => void save()}>保存</button><button onClick={() => setEditing(false)}>取消</button></div>
           </div>
         ) : item.type === "text" ? (
-          <button className={`text-content ${expanded ? "expanded" : ""}`} onClick={() => setExpanded((value) => !value)}>
+          <div
+            className={`text-content ${expanded ? "expanded" : ""}`}
+            role="button"
+            tabIndex={0}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setExpanded((value) => !value);
+              }
+            }}
+          >
             {item.content}
-          </button>
+          </div>
         ) : item.type === "link" ? (
           <div className="link-content">
             <strong>{item.title}</strong>
