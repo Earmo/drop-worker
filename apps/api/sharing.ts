@@ -112,7 +112,7 @@ export function shareSummary(
   token?: string,
 ): ShareSummary {
   const status = shareStatus(share, now);
-  const shareUrl = share.accessMode === "public" && status === "active" && token
+  const shareUrl = status === "active" && token
     ? new URL(`/s/${token}`, publicUrl).toString()
     : null;
   return {

@@ -56,6 +56,20 @@ test("视图筛选切换会清理选择，并使用通用文件选择器", async
   assert.equal((app.match(/accept="\*\/\*"/g) || []).length, 2);
 });
 
+test("移动端只显示三项底部导航并持续展示有效分享链接", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const mobileNav = app.slice(app.indexOf("function MobileNav"));
+  assert.match(mobileNav, /timeline/);
+  assert.match(mobileNav, /favorites/);
+  assert.match(mobileNav, /shares/);
+  assert.doesNotMatch(mobileNav, /cleanup|trash/);
+  assert.match(app, /className="share-row-url"/);
+  assert.match(css, /grid-template-columns: repeat\(3, 1fr\)/);
+});
+
 test("文本正文使用可选择的文本元素，而不是按钮承载正文", async () => {
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /<button className=\{`text-content/);

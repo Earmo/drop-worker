@@ -375,7 +375,9 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
     const sharedUrl = new URL(created.shareUrl);
     const token = sharedUrl.pathname.split("/").at(-1)!;
     assert.equal(sharedUrl.hash, "#code=0042");
-    assert.equal(created.share.shareUrl, null);
+    assert.equal(created.share.shareUrl, new URL(`/s/${token}`, current.services.sharing.publicUrl).toString());
+    const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(listed.shares[0]?.shareUrl, new URL(`/s/${token}`, current.services.sharing.publicUrl).toString());
 
     const protectedContent = await request(current.services, `/api/public/shares/${token}`);
     assert.equal(protectedContent.status, 401);

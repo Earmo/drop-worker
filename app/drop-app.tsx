@@ -907,13 +907,16 @@ function ShareManager({
                   <span>访问 {share.accessCount} · 下载 {share.downloadCount}</span>
                   {share.lastAccessedAt && <span>最近 {formatTime(share.lastAccessedAt)}</span>}
                 </div>
+                {share.status === "active" && share.shareUrl && (
+                  <div className="share-row-url">
+                    <input readOnly value={share.shareUrl} aria-label={`${share.itemLabel}分享链接`} />
+                    <button onClick={() => onCopy(share.shareUrl!)} title="复制分享链接" aria-label="复制分享链接"><Copy size={15} /></button>
+                  </div>
+                )}
               </div>
               <div className="share-row-actions">
-                {share.status === "active" && share.shareUrl && (
-                  <button onClick={() => onCopy(share.shareUrl!)} title="复制分享链接" aria-label="复制分享链接"><Copy size={16} /></button>
-                )}
                 {share.status === "active" && share.accessMode === "code" && (
-                  <span className="share-once-note">完整链接仅创建时可见</span>
+                  <span className="share-once-note">口令需另行输入</span>
                 )}
                 {share.status === "active" && (
                   <button className="danger" onClick={() => void onRevoke(share)} title="撤销分享" aria-label="撤销分享"><X size={16} /></button>
@@ -1315,8 +1318,6 @@ function MobileNav({ view, onView }: { view: View; onView(view: View): void }) {
     { value: "timeline" as const, icon: ArchiveRestore, label: "时间流" },
     { value: "favorites" as const, icon: Star, label: "收藏" },
     { value: "shares" as const, icon: Share2, label: "分享" },
-    { value: "cleanup" as const, icon: HardDrive, label: "清理" },
-    { value: "trash" as const, icon: Trash2, label: "回收站" },
   ];
   return <nav className="mobile-nav">{values.map(({ value, icon: Icon, label }) => <button key={value} className={view === value ? "active" : ""} onClick={() => onView(value)}><Icon size={18} /><span>{label}</span></button>)}</nav>;
 }

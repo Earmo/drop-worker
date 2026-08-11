@@ -1428,6 +1428,51 @@ textarea:focus-visible,
   font-size: 10px;
 }
 
+.share-row-url {
+  display: grid;
+  width: min(100%, 620px);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.share-row-url input {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+
+.share-row-url input:focus {
+  border-color: var(--accent);
+}
+
+.share-row-url button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.share-row-url button:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
 .share-row-actions {
   display: flex;
   align-items: center;
@@ -2089,7 +2134,7 @@ textarea:focus-visible,
     left: 10px;
     z-index: 16;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     min-height: 60px;
     padding: 5px;
     border: 1px solid var(--line-strong);
