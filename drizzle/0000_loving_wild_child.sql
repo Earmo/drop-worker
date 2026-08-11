@@ -1,4 +1,4 @@
-CREATE TABLE `auth_challenges` (
+CREATE TABLE IF NOT EXISTS `auth_challenges` (
 	`id` text PRIMARY KEY NOT NULL,
 	`email` text NOT NULL,
 	`code_hash` text NOT NULL,
@@ -7,8 +7,8 @@ CREATE TABLE `auth_challenges` (
 	`expires_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_auth_challenges_expires` ON `auth_challenges` (`expires_at`);--> statement-breakpoint
-CREATE TABLE `items` (
+CREATE INDEX IF NOT EXISTS `idx_auth_challenges_expires` ON `auth_challenges` (`expires_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `items` (
 	`id` text PRIMARY KEY NOT NULL,
 	`owner_id` text NOT NULL,
 	`type` text NOT NULL,
@@ -25,11 +25,11 @@ CREATE TABLE `items` (
 	`deleted_at` integer
 );
 --> statement-breakpoint
-CREATE INDEX `idx_items_owner_created` ON `items` (`owner_id`,`created_at`);--> statement-breakpoint
-CREATE INDEX `idx_items_owner_deleted` ON `items` (`owner_id`,`deleted_at`);--> statement-breakpoint
-CREATE INDEX `idx_items_owner_favorite` ON `items` (`owner_id`,`favorite`);--> statement-breakpoint
-CREATE INDEX `idx_items_owner_type` ON `items` (`owner_id`,`type`);--> statement-breakpoint
-CREATE TABLE `local_sessions` (
+CREATE INDEX IF NOT EXISTS `idx_items_owner_created` ON `items` (`owner_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_items_owner_deleted` ON `items` (`owner_id`,`deleted_at`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_items_owner_favorite` ON `items` (`owner_id`,`favorite`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_items_owner_type` ON `items` (`owner_id`,`type`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `local_sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`token_hash` text NOT NULL,
 	`owner_id` text NOT NULL,
@@ -38,9 +38,9 @@ CREATE TABLE `local_sessions` (
 	`expires_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `local_sessions_token_hash_unique` ON `local_sessions` (`token_hash`);--> statement-breakpoint
-CREATE INDEX `idx_local_sessions_expires` ON `local_sessions` (`expires_at`);--> statement-breakpoint
-CREATE TABLE `uploads` (
+CREATE UNIQUE INDEX IF NOT EXISTS `local_sessions_token_hash_unique` ON `local_sessions` (`token_hash`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_local_sessions_expires` ON `local_sessions` (`expires_at`);--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `uploads` (
 	`id` text PRIMARY KEY NOT NULL,
 	`owner_id` text NOT NULL,
 	`object_key` text NOT NULL,
@@ -56,5 +56,5 @@ CREATE TABLE `uploads` (
 	`expires_at` integer NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX `idx_uploads_owner_status` ON `uploads` (`owner_id`,`status`);--> statement-breakpoint
-CREATE INDEX `idx_uploads_expires` ON `uploads` (`expires_at`);
+CREATE INDEX IF NOT EXISTS `idx_uploads_owner_status` ON `uploads` (`owner_id`,`status`);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `idx_uploads_expires` ON `uploads` (`expires_at`);
