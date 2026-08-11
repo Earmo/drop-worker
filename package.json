@@ -19,8 +19,8 @@
     "db:generate:postgres": "drizzle-kit generate --config drizzle.postgres.config.ts",
     "db:generate:mysql": "drizzle-kit generate --config drizzle.mysql.config.ts",
     "admin": "tsx server/admin.ts",
-    "cf:types": "wrangler types worker-configuration.d.ts --strict-vars=false",
-    "cf:types:check": "wrangler types worker-configuration.d.ts --strict-vars=false --check",
+    "cf:types": "wrangler types worker-configuration.d.ts --strict-vars=false --config wrangler.example.jsonc",
+    "cf:types:check": "wrangler types worker-configuration.d.ts --strict-vars=false --config wrangler.example.jsonc --check",
     "cf:deploy": "npm run build && wrangler deploy --config wrangler.jsonc",
     "cf:dry-run": "npm run build && wrangler deploy --dry-run --config wrangler.jsonc"
   },
