@@ -28,7 +28,7 @@ export async function migrateConfiguredDatabase(): Promise<void> {
     const client = new Client({ connectionString: url.toString(), ssl });
     await client.connect();
     try {
-      await migratePostgres(postgresDrizzle(client), { migrationsFolder: "./drizzle/postgres" });
+      await migratePostgres(postgresDrizzle(client), { migrationsFolder: "./drizzle-postgres" });
     } finally {
       await client.end();
     }
@@ -47,7 +47,7 @@ export async function migrateConfiguredDatabase(): Promise<void> {
     bigNumberStrings: false,
   });
   try {
-    await migrateMySql(mysqlDrizzle(connection), { migrationsFolder: "./drizzle/mysql" });
+    await migrateMySql(mysqlDrizzle(connection), { migrationsFolder: "./drizzle-mysql" });
   } finally {
     await connection.end();
   }
