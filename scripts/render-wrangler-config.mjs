@@ -4,7 +4,8 @@ import path from "node:path";
 const SUPPORTED_SMTP_PORTS = ["465", "587", "994"];
 
 function readValue(name, fallback = "") {
-  return (process.env[name] ?? fallback).trim();
+  const value = process.env[name]?.trim();
+  return value || fallback.trim();
 }
 
 function requireValue(name, fallback = "") {

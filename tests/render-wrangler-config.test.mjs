@@ -47,3 +47,36 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("GitHub Actions 空变量使用部署默认值", async () => {
+  const root = await mkdtemp(join(tmpdir(), "drop-worker-render-"));
+  try {
+    const output = join(root, "wrangler.jsonc");
+    await execFileAsync(process.execPath, [renderScript, output], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        WORKER_NAME: "drop-worker",
+        D1_DATABASE_NAME: "drop-worker",
+        D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
+        R2_BUCKET_NAME: "drop-worker-files",
+        PUBLIC_URL: "https://drop.example.com",
+        SHARING_ENABLED: "",
+        OWNER_EMAIL: "owner@example.com",
+        AUTH_EMAIL_PROVIDER: "smtp",
+        AUTH_FROM_EMAIL: "",
+        AUTH_FROM_NAME: "Drop Worker",
+        SMTP_HOST: "smtp.example.com",
+        SMTP_PORT: "994",
+        SMTP_SECURE: "false",
+        SMTP_FROM: "owner@example.com",
+        SMTP_TIMEOUT_MS: "15000",
+      },
+    });
+
+    const config = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(config.vars.SHARING_ENABLED, "true");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
