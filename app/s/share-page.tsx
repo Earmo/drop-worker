@@ -14,6 +14,11 @@ import { useCallback, useEffect, useState } from "react";
 import type { ApiError, PublicShareContent } from "../../packages/contracts";
 import { formatBytes, formatTime } from "../client/format";
 
+function isPreviewableImage(mimeType: string): boolean {
+  const normalized = mimeType.split(";", 1)[0]?.trim().toLocaleLowerCase();
+  return Boolean(normalized?.startsWith("image/") && normalized !== "image/svg+xml");
+}
+
 type ViewState =
   | { kind: "loading" }
   | { kind: "verify" }
@@ -164,6 +169,18 @@ export function PublicSharePage({ token }: { token: string }) {
             <p className="share-kicker">共享文件</p>
             <h1>{state.content.fileName}</h1>
             <p>{formatBytes(state.content.sizeBytes)} · {state.content.mimeType}</p>
+            {isPreviewableImage(state.content.mimeType) && (
+              <figure className="shared-image-preview">
+                {/* 预览必须直连带分享 Cookie 的同源接口，不能交给图片优化代理缓存。 */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/public/shares/${encodeURIComponent(token)}/preview`}
+                  alt={state.content.fileName}
+                  decoding="async"
+                  referrerPolicy="no-referrer"
+                />
+              </figure>
+            )}
             <a className="share-primary" href={`/api/public/shares/${encodeURIComponent(token)}/download`}>
               <Download size={18} /> 下载文件
             </a>

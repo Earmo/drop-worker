@@ -19,7 +19,7 @@ import {
   ApiEnv
 } from "./http";
 import type { RuntimeServices } from "./platform";
-import { fileDownloadResponse } from "./download";
+import { fileDownloadResponse, isPreviewableImage } from "./download";
 import {
   createShareCookie,
   hasShareCookie,
@@ -159,6 +159,32 @@ api.post("/api/public/shares/:token/verify", async (c) => {
   c.header("set-cookie", cookie);
   c.header("cache-control", "private, no-store");
   return c.json({ verified: true, expiresAt: Math.min(share.expiresAt, now + 24 * 60 * 60 * 1000) });
+});
+
+api.on(["GET", "HEAD"], "/api/public/shares/:token/preview", async (c) => {
+  const now = Date.now();
+  const token = c.req.param("token");
+  const share = await resolvePublicShare(c.env.services, token, now);
+  if (!share || share.item.type !== "file" || !share.item.objectKey || !isPreviewableImage(share.item.mimeType)) {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或不支持预览", 404);
+  }
+  if (
+    share.accessMode === "code"
+    && !(await hasShareCookie(c.req.raw, share.id, c.env.services.sharing.secret, now))
+  ) {
+    return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
+  }
+  const response = await fileDownloadResponse({
+    request: c.req.raw,
+    blobs: c.env.services.blobs,
+    objectKey: share.item.objectKey,
+    fileName: share.item.displayName || share.item.originalName || "image",
+    mimeType: share.item.mimeType,
+    attachmentOnly: false,
+  });
+  if (!response) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+  response.headers.set("x-robots-tag", "noindex, nofollow, noarchive");
+  return response;
 });
 
 api.on(["GET", "HEAD"], "/api/public/shares/:token/download", async (c) => {

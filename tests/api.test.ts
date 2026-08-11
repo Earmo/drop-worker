@@ -651,3 +651,91 @@ test("公开文件分享支持单区间下载并可立即撤销", async () => {
     await current.close();
   }
 });
+
+test("分享图片预览在验证后内联返回且不计为下载", async () => {
+  const current = await fixture();
+  try {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const upload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "preview.png",
+        mimeType: "image/png",
+        sizeBytes: bytes.byteLength,
+        fingerprint: "preview.png:8:1",
+      }),
+    })).json()) as UploadSession;
+    await request(current.services, `/api/uploads/${upload.id}/parts/1`, {
+      method: "PUT",
+      body: bytes,
+      headers: { "content-length": String(bytes.byteLength), "content-type": "image/png" },
+    });
+    const item = (await (await request(current.services, `/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    })).json()) as DropItem;
+    const created = (await (await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "code", code: "0042", expiresInSeconds: 3_600 }),
+    })).json()) as CreateShareResponse;
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    const beforeVerification = await request(current.services, `/api/public/shares/${token}/preview`);
+    assert.equal(beforeVerification.status, 401);
+    assert.doesNotMatch(await beforeVerification.text(), /preview\.png/);
+
+    const verified = await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "0042" }),
+    });
+    assert.equal(verified.status, 200);
+    const cookie = verified.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(cookie);
+
+    const preview = await request(current.services, `/api/public/shares/${token}/preview`, {
+      headers: { cookie },
+    });
+    assert.equal(preview.status, 200);
+    assert.equal(preview.headers.get("content-type"), "image/png");
+    assert.match(preview.headers.get("content-disposition") || "", /^inline;/);
+    assert.equal(preview.headers.get("cache-control"), "private, no-store");
+    assert.deepEqual(new Uint8Array(await preview.arrayBuffer()), bytes);
+    let shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(shares.shares[0]?.downloadCount, 0);
+
+    const download = await request(current.services, `/api/public/shares/${token}/download`, { headers: { cookie } });
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get("content-disposition") || "", /^attachment;/);
+    shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(shares.shares[0]?.downloadCount, 1);
+
+    const svgBytes = new TextEncoder().encode("<svg xmlns='http://www.w3.org/2000/svg'></svg>");
+    const svgUpload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "blocked.svg",
+        mimeType: "image/svg+xml",
+        sizeBytes: svgBytes.byteLength,
+        fingerprint: `blocked.svg:${svgBytes.byteLength}:1`,
+      }),
+    })).json()) as UploadSession;
+    await request(current.services, `/api/uploads/${svgUpload.id}/parts/1`, {
+      method: "PUT",
+      body: svgBytes,
+      headers: { "content-length": String(svgBytes.byteLength), "content-type": "image/svg+xml" },
+    });
+    const svgItem = (await (await request(current.services, `/api/uploads/${svgUpload.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    })).json()) as DropItem;
+    const svgShare = (await (await request(current.services, `/api/items/${svgItem.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "public", expiresInSeconds: 3_600 }),
+    })).json()) as CreateShareResponse;
+    const svgToken = new URL(svgShare.shareUrl).pathname.split("/").at(-1)!;
+    assert.equal((await request(current.services, `/api/public/shares/${svgToken}/preview`)).status, 404);
+    const svgDownload = await request(current.services, `/api/public/shares/${svgToken}/download`);
+    assert.match(svgDownload.headers.get("content-disposition") || "", /^attachment;/);
+  } finally {
+    await current.close();
+  }
+});

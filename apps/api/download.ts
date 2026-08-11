@@ -2,6 +2,16 @@ import type { BlobRange, BlobStore } from "./platform";
 
 type ParsedRange = BlobRange | "invalid" | null;
 
+function normalizedMimeType(mimeType: string | null): string | null {
+  const value = mimeType?.split(";", 1)[0]?.trim().toLocaleLowerCase();
+  return value || null;
+}
+
+export function isPreviewableImage(mimeType: string | null): boolean {
+  const normalized = normalizedMimeType(mimeType);
+  return Boolean(normalized?.startsWith("image/") && normalized !== "image/svg+xml");
+}
+
 function parseRange(header: string | null, totalSize: number): ParsedRange {
   if (!header) return null;
   if (!header.startsWith("bytes=") || header.includes(",")) return "invalid";
@@ -54,10 +64,10 @@ export async function fileDownloadResponse(input: {
   const object = isHead ? null : await input.blobs.get(input.objectKey, range ?? undefined);
   if (!isHead && !object) return null;
   const selectedSize = range?.length ?? totalSize;
-  const inline = !input.attachmentOnly
-    && Boolean(input.mimeType?.startsWith("image/") && input.mimeType !== "image/svg+xml");
+  const previewMimeType = isPreviewableImage(input.mimeType) ? normalizedMimeType(input.mimeType) : null;
+  const inline = !input.attachmentOnly && Boolean(previewMimeType);
   const headers = new Headers({
-    "content-type": inline ? (object?.contentType || input.mimeType || "application/octet-stream") : "application/octet-stream",
+    "content-type": inline ? previewMimeType! : "application/octet-stream",
     "content-length": String(selectedSize),
     "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(input.fileName)}`,
     "x-content-type-options": "nosniff",

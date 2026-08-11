@@ -1907,6 +1907,25 @@ textarea:focus-visible,
   font-size: 10px;
 }
 
+.shared-image-preview {
+  display: grid;
+  width: 100%;
+  max-height: min(68svh, 720px);
+  margin: 22px 0 2px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  place-items: center;
+}
+
+.shared-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: min(68svh, 720px);
+  object-fit: contain;
+}
+
 .shared-file-view footer {
   margin-top: 24px;
 }

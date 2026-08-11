@@ -75,3 +75,17 @@ test("文本正文使用可选择的文本元素，而不是按钮承载正文",
   assert.doesNotMatch(app, /<button className=\{`text-content/);
   assert.match(app, /className=\{`text-content[\s\S]*?role="button"/);
 });
+
+test("分享图片预览仍复用受保护的分享路径", async () => {
+  const [page, css, api] = await Promise.all([
+    readFile(new URL("../app/s/share-page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../apps/api/create-api.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(page, /shared-image-preview/);
+  assert.match(page, /\/preview/);
+  assert.match(page, /referrerPolicy="no-referrer"/);
+  assert.match(css, /\.shared-image-preview img/);
+  assert.match(api, /\/api\/public\/shares\/:token\/preview/);
+  assert.match(api, /hasShareCookie\(c\.req\.raw, share\.id/);
+});
