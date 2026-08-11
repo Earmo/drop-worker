@@ -334,3 +334,7 @@ npm test
 - 不记录正文、链接、文件名、密码或验证码到日志。
 - 不缓存 API 数据用于离线访问；Service Worker 只缓存应用外壳和静态资源。
 - 不提供端到端加密。部署者仍需保护主机、Cloudflare 账号、SMTP 凭据和备份文件。
+
+## 开源协议
+
+本项目采用 [MIT License](LICENSE) 开源协议。
