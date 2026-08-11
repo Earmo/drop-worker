@@ -1,7 +1,7 @@
 # Drop Worker
 
 Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。
-提供最新优先的时间流、搜索和类型筛选、收藏、回收站、存储清理、500MB文件分片上传与断点续传。
+提供最新优先的时间流、搜索和类型筛选、收藏、临时分享、回收站、存储清理、500MB 文件分片上传与断点续传。
 
 ## 界面预览
 
@@ -13,8 +13,8 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 
 应用支持两种正式部署方式：
 
-- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用 Cloudflare Email Service 邮箱验证码或私有 Sites 身份。
-- 本地自托管：单个 Node.js 进程 + SQLite + 本地文件系统，可使用 Docker Compose 或直接命令运行。
+- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用 Cloudflare Email Service 邮箱验证码或受 `OWNER_EMAIL` 限制的 Sites 平台身份。
+- 本地自托管：单个 Node.js 进程，可选择 SQLite/MySQL/PostgreSQL 与本地文件系统/S3 兼容存储。
 
 ## 环境要求
 
@@ -48,7 +48,7 @@ pnpm start
 
 默认地址为 `http://localhost:3000`。SQLite、文件对象和未完成上传默认保存在 `./data`。
 
-本地自托管入口是 `server/local.ts`：元数据使用 Node.js 内置 SQLite，文件和上传分片使用 `DATA_DIR` 下的本地文件系统。该模式不读取 `wrangler.jsonc`，不连接 D1 或 R2，也不需要 Cloudflare 账号与 Wrangler。
+本地自托管入口是 `server/local.ts`。默认元数据使用 Node.js 内置 SQLite，文件和上传分片使用 `DATA_DIR` 下的本地文件系统；也可改用 MySQL/PostgreSQL 与 S3 兼容存储。该模式不读取 `wrangler.jsonc`，也不需要 Cloudflare 账号与 Wrangler。
 
 ### 邮件验证码模式
 
@@ -72,6 +72,14 @@ ALLOW_INSECURE_HTTP=true
 
 该模式会持续显示安全警告，不能直接暴露到公网。公网或不受信任的局域网应使用 Caddy、Nginx 等反向代理提供 HTTPS，并把 `PUBLIC_URL` 设置为最终 HTTPS 地址。
 
+反向代理后的口令限流只会读取显式信任的转发头。按代理地址或 CIDR 配置 `TRUST_PROXY`，多个值使用逗号分隔；未配置时以直连地址为准。
+
+## 临时分享
+
+文本和文件条目可以创建公开分享或四位数字口令分享。每个条目最多一个有效链接，有效期可选 1 小时、1 天、7 天或 30 天；进入回收站、到期或手动撤销后立即失效。受保护链接把口令放在 URL Fragment 中用于预填，访问者仍须点击确认，完整链接只在创建时显示一次。
+
+文件分享始终作为附件下载，不在公开页面预览，并支持 HTTP Range 断点续传。分享管理视图只保留聚合访问/下载统计，不保存访客原始 IP 或逐次访问日志。紧急情况下可设置 `SHARING_ENABLED=false` 暂停全部分享。
+
 ## Docker Compose
 
 准备 `.env` 后运行：
@@ -82,7 +90,19 @@ docker compose up -d --build
 
 默认映射到主机 `3000` 端口。需要更换主机端口时设置 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
 
-Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
+默认 Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
+
+### MySQL、PostgreSQL 与 S3/MinIO
+
+关系型数据库与对象存储可以独立组合：
+
+- `DATABASE_DRIVER=sqlite|mysql|postgres`；MySQL 要求 8.0+，PostgreSQL 要求 14+，当前不承诺 MariaDB。
+- `BLOB_DRIVER=local|s3`；S3 模式配置 region、私有桶、对象前缀与可选自定义 endpoint。
+- 外部数据库使用 `DATABASE_URL`，应用启动时只校验架构，不自动执行 DDL。首次启动或升级前运行 `npm run admin -- migrate-database`。
+- S3 桶必须预先创建且保持私有。未配置静态密钥时使用 AWS 默认凭据链；MinIO 通常需要 `S3_FORCE_PATH_STYLE=true`。
+- 数据库和 S3 默认要求加密连接。局域网明文连接必须分别显式开启 `DATABASE_ALLOW_INSECURE` 或 `S3_ALLOW_INSECURE`。
+
+仓库在 `examples/compose/` 提供 PostgreSQL+MinIO 与 MySQL+MinIO 的完整 Compose 示例。自托管当前仍只承诺单个活动应用实例，不代表高可用集群。
 
 ### 使用 Docker Hub 镜像
 
@@ -129,6 +149,25 @@ pnpm admin -- restore ./backups/manual
 
 恢复命令默认拒绝覆盖已有数据库。网页中的“导出元数据”会生成 JSON 索引，适合审阅和轻量备份；完整文件备份使用管理命令或 R2 兼容工具。
 
+任意自托管存储组合使用可移植备份：
+
+```powershell
+npm run admin -- storage-backup ./backups/storage
+npm run admin -- storage-restore ./backups/storage
+```
+
+可移植备份包含条目、已完成文件、有效/近期分享及校验清单，不包含登录会话、验证码挑战、限流窗口和未完成上传。归档本身不加密，应写入加密磁盘或由成熟备份工具继续保护。
+
+### 自托管存储迁移
+
+迁移时通过 `SOURCE_` 和 `TARGET_` 前缀分别提供 `DATA_DIR`、数据库、对象存储与 `SESSION_SECRET` 配置，然后运行：
+
+```powershell
+npm run admin -- migrate-storage ./backups/migration-work
+```
+
+迁移直接丢弃未完成上传，首次只接受空目标，并校验每个已完成对象的 SHA-256。工作目录中的 `migration-report.json` 会记录丢弃项、multipart 中止结果和最终状态；失败时源数据保持不动，使用同一个工作目录重试会继续同一迁移。源/目标密钥不同会拒绝恢复，可显式传入 `--revoke-shares`，以撤销全部分享后完成迁移。
+
 ### Cloudflare 与本地实例迁移
 
 管理 CLI 也可以通过已认证的 HTTP API 创建可移植备份：
@@ -165,7 +204,7 @@ Copy-Item wrangler.example.jsonc wrangler.jsonc
 1. 在 Cloudflare Email Service 中启用发信域名，并验证接收验证码的个人邮箱。
 2. 配置 `OWNER_EMAIL`、`AUTH_FROM_EMAIL` 和 `AUTH_FROM_NAME`。`AUTH_FROM_EMAIL` 必须属于已在 Email Service 中验证的域名；`send_email` 绑定固定收件人，发件地址可以按配置切换。
 3. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
-4. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名。
+4. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
 5. 生成类型并应用 D1 迁移。
 6. 构建并部署 Worker。
 
@@ -176,6 +215,12 @@ npm run cf:deploy
 ```
 
 验证码 10 分钟有效，连续输入错误 5 次后失效，同一邮箱 60 秒内不能重复发送。登录会话通过 HttpOnly、Secure Cookie 保持 30 天；R2 桶保持私有。
+
+### Sites 托管与匿名分享
+
+使用 Sites 托管时，若要让未登录访客打开分享链接，站点访问模式必须设为公开。Sites 当前不能只公开 `/s/*` 路径，因此应用外壳也会公开加载；所有条目、上传、管理和分享配置接口仍由应用身份校验保护，并且只有 `OWNER_EMAIL` 对应的平台身份会被识别为所有者。
+
+Sites 生产环境至少需要配置 `AUTH_MODE=platform`、`OWNER_EMAIL`、`AUTH_SESSION_SECRET`、`PUBLIC_URL` 和 `SHARING_ENABLED=true`。其中 `AUTH_SESSION_SECRET` 作为 Secret 保存，`PUBLIC_URL` 使用实际生产 HTTPS 地址。缺少所有者邮箱或安全密钥时应用会拒绝提供受保护能力，不能通过把 Sites 保持为私有来替代应用层鉴权。
 
 ### Cloudflare 自定义 SMTP
 
@@ -231,6 +276,8 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
 | `AUTH_EMAIL_PROVIDER` | `cloudflare` 或 `smtp` | `cloudflare` |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
+| `PUBLIC_URL` | 生成分享链接的可信 HTTPS 地址 | 必填 |
+| `SHARING_ENABLED` | 是否允许创建和访问分享 | `true` |
 | `AUTH_FROM_NAME` | 邮件显示的发件人名称 | Worker 名称 |
 | `SMTP_PORT` | SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS） | `587` |
 | `SMTP_SECURE` | 是否使用隐式 TLS | `false` |
@@ -273,15 +320,16 @@ npm test
 - `app/`：React/Vinext 页面、布局和主工作区交互。
 - `app/client/`：浏览器 API 客户端、显示格式和断点上传队列持久化。
 - `apps/api/`：与部署平台无关的 Hono 路由、HTTP 中间件和运行时接口。
-- `apps/api/stores/`：D1/R2 与 SQLite/本地文件系统适配器。
+- `apps/api/stores/`：D1、SQLite、MySQL、PostgreSQL、R2、本地文件系统与 S3 适配器。
 - `packages/contracts/`：前后端共享的 Zod 请求、响应和领域契约。
 - `worker/`：Cloudflare Worker、Email Service、自定义 SMTP 和平台身份适配。
 - `server/`：本地 Node.js 入口、认证、管理和备份迁移命令。
-- `db/` 与 `drizzle/`：共享表结构和正式数据库迁移。
+- `db/` 与 `drizzle/`：SQLite/D1、MySQL 和 PostgreSQL 的方言 Schema 与正式迁移。
 
 ## 数据与安全边界
 
-- 不提供公开分享、多用户空间或匿名文件访问。
+- 只有显式创建且仍有效的文本/文件分享允许匿名访问；其他内容仍要求所有者身份。
+- 不提供多用户空间、集合分享、永久分享、文件公开预览或访客上传。
 - 不抓取链接元数据，不解析或索引文件内部内容。
 - 不记录正文、链接、文件名、密码或验证码到日志。
 - 不缓存 API 数据用于离线访问；Service Worker 只缓存应用外壳和静态资源。

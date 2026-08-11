@@ -6,7 +6,7 @@
   // 构建产物中的 Worker 入口文件；npm run build 会生成它。
   "main": "dist/server/index.js",
   // 固定 Workers 运行时兼容行为；升级运行时前请先验证并更新日期。
-  "compatibility_date": "2026-08-05",
+  "compatibility_date": "2026-08-11",
   // 启用 Node.js 兼容层，供 Worker 中使用 Node 风格 API 的依赖运行。
   "compatibility_flags": ["nodejs_compat"],
   // 将前端静态资源与 Worker 一起发布。
@@ -59,6 +59,10 @@
     "AUTH_EMAIL_PROVIDER": "smtp",
     // 单实例最大存储空间，单位为字节。
     "MAX_STORAGE_BYTES": "10737418240",
+    // 生成公开分享链接时使用的可信地址，不能从请求 Host 动态推断。
+    "PUBLIC_URL": "https://drop.example.com",
+    // 紧急情况下可设为 false，立即暂停创建和访问全部分享。
+    "SHARING_ENABLED": "true",
     // 唯一允许登录的个人邮箱，也用于接收验证码。
     "OWNER_EMAIL": "you@example.com",
     // 验证码邮件的发件地址；使用 Cloudflare Email Service 时必须是已验证域名地址。

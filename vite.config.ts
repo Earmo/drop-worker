@@ -14,11 +14,14 @@ const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
-  compatibility_date: "2026-08-05",
+  compatibility_date: "2026-08-11",
   vars: {
     AUTH_MODE: "development",
     OWNER_EMAIL: "local@drop-worker.invalid",
     MAX_STORAGE_BYTES: String(10 * 1024 * 1024 * 1024),
+    PUBLIC_URL: "http://localhost:3000",
+    SHARING_ENABLED: "true",
+    AUTH_SESSION_SECRET: "drop-worker-development-share-secret",
   },
   d1_databases: d1
     ? [

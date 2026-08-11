@@ -5,10 +5,9 @@ import {
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import nodemailer from "nodemailer";
-import { schemaStatements } from "../db/sql";
-import type { Identity, RuntimeServices } from "../apps/api/platform";
+import type { Identity, MetadataStore, RuntimeServices } from "../apps/api/platform";
+import { isLoopbackPublicUrl, validatePublicUrl } from "../apps/api/sharing";
 
 const SESSION_COOKIE = "drop_worker_session";
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
@@ -28,15 +27,6 @@ type LocalAuthConfig = {
     password?: string;
     from: string;
   };
-};
-
-type SessionRow = { owner_id: string; email: string; expires_at: number };
-type ChallengeRow = {
-  id: string;
-  email: string;
-  code_hash: string;
-  attempts: number;
-  expires_at: number;
 };
 
 function sha256(value: string): string {
@@ -96,36 +86,24 @@ function verifyPassword(password: string, stored: string): boolean {
 }
 
 export class LocalAuth {
-  private readonly database: DatabaseSync;
   private readonly ownerId: string;
 
   constructor(
-    databasePath: string,
+    private readonly metadata: MetadataStore,
     private readonly config: LocalAuthConfig,
   ) {
-    this.database = new DatabaseSync(databasePath);
-    this.database.exec("PRAGMA journal_mode = WAL");
-    // 本地模式启动时确保表存在；Cloudflare 模式则要求单独应用正式迁移。
-    for (const statement of schemaStatements) this.database.prepare(statement).run();
     this.ownerId = `local:${sha256(normalizedEmail(config.email)).slice(0, 24)}`;
   }
 
-  close(): void {
-    this.database.close();
-  }
+  close(): void {}
 
   async resolveIdentity(request: Request): Promise<Identity | null> {
     // Cookie 只作为索引，数据库校验哈希和过期时间后才返回 owner 身份。
     const token = cookieValue(request, SESSION_COOKIE);
     if (!token) return null;
-    const row = this.database
-      .prepare(
-        `SELECT owner_id, email, expires_at FROM local_sessions
-         WHERE token_hash = ? AND expires_at > ?`,
-      )
-      .get(sha256(token), Date.now()) as SessionRow | undefined;
+    const row = await this.metadata.getAuthSession(sha256(token), Date.now());
     if (!row) return null;
-    return { ownerId: row.owner_id, email: row.email };
+    return { ownerId: row.ownerId, email: row.email };
   }
 
   async handle(request: Request): Promise<Response | null> {
@@ -176,12 +154,14 @@ export class LocalAuth {
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const now = Date.now();
     const codeHash = sha256(`${challengeId}:${code}:${this.config.sessionSecret}`);
-    this.database
-      .prepare(
-        `INSERT INTO auth_challenges (id, email, code_hash, attempts, created_at, expires_at)
-         VALUES (?, ?, ?, 0, ?, ?)`,
-      )
-      .run(challengeId, normalizedEmail(body.email), codeHash, now, now + 10 * 60 * 1000);
+    await this.metadata.createAuthChallenge({
+      id: challengeId,
+      email: normalizedEmail(body.email),
+      codeHash,
+      attempts: 0,
+      createdAt: now,
+      expiresAt: now + 10 * 60 * 1000,
+    });
 
     const transport = nodemailer.createTransport({
       host: this.config.smtp.host,
@@ -219,43 +199,33 @@ export class LocalAuth {
     ) {
       return authError("INVALID_CODE", "验证码无效", 401);
     }
-    const row = this.database
-      .prepare(
-        `SELECT id, email, code_hash, attempts, expires_at FROM auth_challenges
-         WHERE id = ? AND email = ?`,
-      )
-      .get(body.challengeId, normalizedEmail(body.email)) as ChallengeRow | undefined;
-    if (!row || row.expires_at <= Date.now() || row.attempts >= 5) {
+    const row = await this.metadata.getAuthChallenge(body.challengeId, normalizedEmail(body.email));
+    if (!row || row.expiresAt <= Date.now() || row.attempts >= 5) {
       return authError("INVALID_CODE", "验证码无效或已过期", 401);
     }
-    this.database.prepare("UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ?").run(row.id);
+    await this.metadata.incrementAuthChallengeAttempts(row.id);
     const provided = Buffer.from(sha256(`${row.id}:${body.code}:${this.config.sessionSecret}`), "hex");
-    const expected = Buffer.from(row.code_hash, "hex");
+    const expected = Buffer.from(row.codeHash, "hex");
     if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
       return authError("INVALID_CODE", "验证码无效或已过期", 401);
     }
-    this.database.prepare("DELETE FROM auth_challenges WHERE id = ?").run(row.id);
+    await this.metadata.deleteAuthChallenge(row.id);
     // 通过后删除挑战并签发 30 天会话，后续请求只需验证 Cookie，不必重复发信。
     return this.createSession();
   }
 
-  private createSession(): Response {
+  private async createSession(): Promise<Response> {
     // 服务端保存 token 哈希，浏览器拿到的原始 token 只存在 HttpOnly Cookie 中。
     const token = randomBytes(32).toString("base64url");
     const now = Date.now();
-    this.database
-      .prepare(
-        `INSERT INTO local_sessions (id, token_hash, owner_id, email, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        crypto.randomUUID(),
-        sha256(token),
-        this.ownerId,
-        normalizedEmail(this.config.email),
-        now,
-        now + SESSION_SECONDS * 1000,
-      );
+    await this.metadata.createAuthSession({
+      id: crypto.randomUUID(),
+      tokenHash: sha256(token),
+      ownerId: this.ownerId,
+      email: normalizedEmail(this.config.email),
+      createdAt: now,
+      expiresAt: now + SESSION_SECONDS * 1000,
+    });
     return Response.json(
       { authenticated: true, email: this.config.email },
       {
@@ -271,7 +241,7 @@ export class LocalAuth {
     // 删除服务端会话与清空 Cookie 都是幂等操作，重复点击退出不会产生错误。
     const token = cookieValue(request, SESSION_COOKIE);
     if (token) {
-      this.database.prepare("DELETE FROM local_sessions WHERE token_hash = ?").run(sha256(token));
+      await this.metadata.deleteAuthSession(sha256(token));
     }
     return Response.json(
       { authenticated: false },
@@ -292,12 +262,11 @@ export function localAuthConfigFromEnv(): LocalAuthConfig {
   if (!email) throw new Error("缺少 ADMIN_EMAIL");
   const sessionSecret = process.env.SESSION_SECRET?.trim();
   if (!sessionSecret || sessionSecret.length < 32) throw new Error("SESSION_SECRET 至少需要 32 个字符");
-  const publicUrl = new URL(process.env.PUBLIC_URL || "http://localhost:3000");
-  const localHost = publicUrl.hostname === "localhost" || publicUrl.hostname === "127.0.0.1";
-  const insecureHttp = publicUrl.protocol !== "https:" && !localHost;
-  if (insecureHttp && process.env.ALLOW_INSECURE_HTTP !== "true") {
-    throw new Error("非 localhost 的 HTTP 部署必须显式设置 ALLOW_INSECURE_HTTP=true");
-  }
+  const publicUrl = validatePublicUrl(
+    process.env.PUBLIC_URL || "http://localhost:3000",
+    process.env.ALLOW_INSECURE_HTTP === "true",
+  );
+  const insecureHttp = publicUrl.protocol === "http:" && !isLoopbackPublicUrl(publicUrl);
   if (mode === "password" && !process.env.ADMIN_PASSWORD_HASH) {
     throw new Error("密码模式缺少 ADMIN_PASSWORD_HASH，可运行 npm run admin -- hash-password 生成");
   }

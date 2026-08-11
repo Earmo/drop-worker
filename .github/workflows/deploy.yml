@@ -66,6 +66,8 @@ jobs:
           R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
           AUTH_EMAIL_PROVIDER: ${{ vars.AUTH_EMAIL_PROVIDER }}
           MAX_STORAGE_BYTES: ${{ vars.MAX_STORAGE_BYTES }}
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+          SHARING_ENABLED: ${{ vars.SHARING_ENABLED }}
           OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
           AUTH_FROM_EMAIL: ${{ secrets.AUTH_FROM_EMAIL }}
           AUTH_FROM_NAME: ${{ vars.AUTH_FROM_NAME }}

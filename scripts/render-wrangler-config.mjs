@@ -31,6 +31,8 @@ const emailProvider = requireOneOf("AUTH_EMAIL_PROVIDER", ["cloudflare", "smtp"]
 const authFromEmail = readValue("AUTH_FROM_EMAIL");
 const authFromName = requireValue("AUTH_FROM_NAME", workerName);
 const maxStorageBytes = requireValue("MAX_STORAGE_BYTES", "10737418240");
+const publicUrl = requireValue("PUBLIC_URL");
+const sharingEnabled = requireOneOf("SHARING_ENABLED", ["true", "false"], "true");
 const smtpHost = readValue("SMTP_HOST");
 const smtpPort = requireValue("SMTP_PORT", "587");
 const smtpSecure = requireOneOf("SMTP_SECURE", ["true", "false"], "false");
@@ -60,7 +62,7 @@ const config = {
   $schema: "./node_modules/wrangler/config-schema.json",
   name: workerName,
   main: "dist/server/index.js",
-  compatibility_date: "2026-08-05",
+  compatibility_date: "2026-08-11",
   compatibility_flags: ["nodejs_compat"],
   assets: {
     directory: "./dist/client",
@@ -96,6 +98,8 @@ const config = {
     AUTH_MODE: "smtp-otp",
     AUTH_EMAIL_PROVIDER: emailProvider,
     MAX_STORAGE_BYTES: maxStorageBytes,
+    PUBLIC_URL: publicUrl,
+    SHARING_ENABLED: sharingEnabled,
     OWNER_EMAIL: ownerEmail,
     AUTH_FROM_EMAIL: authFromEmail,
     AUTH_FROM_NAME: authFromName,

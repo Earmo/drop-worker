@@ -22,6 +22,12 @@ async function servicesAt(root: string): Promise<{ services: RuntimeServices; cl
       quotaBytes: 10 * 1024 * 1024,
       authMode: "development",
       insecureHttp: false,
+      sharing: {
+        enabled: true,
+        publicUrl: new URL("http://drop-worker.test"),
+        secret: "test-share-secret-that-is-long-enough",
+        resolveClientAddress: () => "127.0.0.1",
+      },
       resolveIdentity: async () => ({ ownerId: "portable-owner", email: "owner@example.com" }),
     },
     close: metadata.close,

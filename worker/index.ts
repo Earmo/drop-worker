@@ -7,10 +7,20 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     try {
       // API 请求走统一 Hono 路由；其他请求交给 Vinext 的应用路由和静态资源处理。
-      if (new URL(request.url).pathname.startsWith("/api/")) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname.startsWith("/api/") || pathname.startsWith("/health/")) {
         return handleApiRequest(request, createCloudflareServices(env));
       }
-      return handler.fetch(request, env, ctx);
+      const response = await handler.fetch(request, env, ctx);
+      if (!pathname.startsWith("/s/")) return response;
+      const headers = new Headers(response.headers);
+      headers.set("cache-control", "private, no-store");
+      headers.set("x-robots-tag", "noindex, nofollow, noarchive");
+      return new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
     } catch (error) {
       console.error(
         JSON.stringify({

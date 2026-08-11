@@ -8,7 +8,17 @@ import { handleApiRequest } from "../apps/api/create-api";
 import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
 import type { RuntimeServices } from "../apps/api/platform";
 import { SqlMetadataStore, type SqlExecutor } from "../apps/api/stores/sql-metadata";
-import type { DropItem, ListItemsResponse, StorageSummary, UploadSession } from "../packages/contracts";
+import { keyedDigest, tokenForShare } from "../apps/api/sharing";
+import { createShareSchema } from "../packages/contracts";
+import type {
+  CreateShareResponse,
+  DropItem,
+  ListItemsResponse,
+  ListSharesResponse,
+  PublicShareContent,
+  StorageSummary,
+  UploadSession,
+} from "../packages/contracts";
 
 async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
   services: RuntimeServices;
@@ -26,6 +36,12 @@ async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
       quotaBytes,
       authMode: "development",
       insecureHttp: false,
+      sharing: {
+        enabled: true,
+        publicUrl: new URL("http://localhost"),
+        secret: "test-share-secret-that-is-long-enough",
+        resolveClientAddress: () => "127.0.0.1",
+      },
       resolveIdentity: async () => ({ ownerId: "test-owner", email: "owner@example.com" }),
     },
     close: async () => {
@@ -46,10 +62,10 @@ function request(
   return handleApiRequest(new Request(`http://localhost${path}`, { ...init, headers }), services);
 }
 
-test("文本、搜索、收藏和回收站形成完整生命周期", async () => {
 test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
   let batchCalled = false;
   const sql: SqlExecutor = {
+    tableExists: async () => false,
     all: async <T>() => [] as T[],
     first: async <T>() => null as T | null,
     run: async () => ({ changes: 0 }),
@@ -61,8 +77,46 @@ test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
   const metadata = new SqlMetadataStore(sql, false);
   await assert.rejects(metadata.ensureSchema(), /数据库架构尚未迁移/);
   assert.equal(batchCalled, false);
+
+  const newerSchema = new SqlMetadataStore({
+    ...sql,
+    tableExists: async () => true,
+    first: async <T>() => ({ version: 4 }) as T,
+  }, false);
+  await assert.rejects(newerSchema.ensureSchema(), /数据库架构尚未迁移/);
 });
 
+test("就绪检查会探测数据库且不泄露失败细节", async () => {
+  const current = await fixture();
+  try {
+    let checked = false;
+    current.services.metadata.healthCheck = async () => {
+      checked = true;
+      throw new Error("postgresql://user:secret@example.invalid/private");
+    };
+    const live = await request(current.services, "/health/live");
+    assert.equal(live.status, 200);
+    const ready = await request(current.services, "/health/ready");
+    assert.equal(ready.status, 503);
+    assert.equal(checked, true);
+    assert.deepEqual(await ready.json(), { status: "unavailable" });
+  } finally {
+    await current.close();
+  }
+});
+
+test("分享期限契约保留四位口令前导零并拒绝自定义超长期限", () => {
+  assert.equal(createShareSchema.parse({ accessMode: "public" }).expiresInSeconds, 7 * 24 * 60 * 60);
+  for (const expiresInSeconds of [3_600, 86_400, 604_800, 2_592_000]) {
+    assert.equal(createShareSchema.parse({ accessMode: "public", expiresInSeconds }).expiresInSeconds, expiresInSeconds);
+  }
+  assert.equal(createShareSchema.parse({ accessMode: "code", code: "0042" }).code, "0042");
+  assert.equal(createShareSchema.safeParse({ accessMode: "public", expiresInSeconds: 7_200 }).success, false);
+  assert.equal(createShareSchema.safeParse({ accessMode: "public", code: "0042" }).success, false);
+  assert.equal(createShareSchema.safeParse({ accessMode: "code", code: "42" }).success, false);
+});
+
+test("文本、搜索、收藏和回收站形成完整生命周期", async () => {
   const current = await fixture();
   try {
     const createdResponse = await request(current.services, "/api/items/text", {
@@ -300,6 +354,297 @@ test("永久删除失败会保留配额并由清理任务安全重试", async ()
     assert.equal(cleanup.purgedItems, 1);
     const released = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
     assert.equal(released.usedBytes, 0);
+  } finally {
+    await current.close();
+  }
+});
+
+test("口令分享限制尝试并在回收站操作后永久失效", async () => {
+  const current = await fixture();
+  try {
+    const item = (await (await request(current.services, "/api/items/text", {
+      method: "POST",
+      body: JSON.stringify({ content: "仅限接收者查看" }),
+    })).json()) as DropItem;
+    const createdResponse = await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "code", code: "0042", expiresInSeconds: 86_400 }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = (await createdResponse.json()) as CreateShareResponse;
+    const sharedUrl = new URL(created.shareUrl);
+    const token = sharedUrl.pathname.split("/").at(-1)!;
+    assert.equal(sharedUrl.hash, "#code=0042");
+    assert.equal(created.share.shareUrl, null);
+
+    const protectedContent = await request(current.services, `/api/public/shares/${token}`);
+    assert.equal(protectedContent.status, 401);
+    assert.equal(protectedContent.headers.get("cache-control"), "private, no-store");
+    assert.doesNotMatch(await protectedContent.text(), /仅限接收者查看/);
+
+    const failed = await Promise.all(Array.from({ length: 5 }, () =>
+      request(current.services, `/api/public/shares/${token}/verify`, {
+        method: "POST",
+        body: JSON.stringify({ code: "9999" }),
+      }),
+    ));
+    assert.deepEqual(failed.map((response) => response.status).sort(), [401, 401, 401, 401, 429]);
+    const locked = await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "0042" }),
+    });
+    assert.equal(locked.status, 429);
+
+    current.services.sharing.resolveClientAddress = () => "127.0.0.2";
+    const verified = await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "0042" }),
+    });
+    assert.equal(verified.status, 200);
+    const setCookie = verified.headers.get("set-cookie") || "";
+    assert.match(setCookie, /HttpOnly/i);
+    assert.match(setCookie, /SameSite=Strict/i);
+    assert.match(setCookie, new RegExp(`Path=/api/public/shares/${token}`));
+    const maxAge = Number(/Max-Age=(\d+)/i.exec(setCookie)?.[1]);
+    assert.ok(maxAge > 0 && maxAge <= 86_400);
+    const cookie = setCookie.split(";")[0];
+    assert.ok(cookie);
+    const contentResponse = await request(current.services, `/api/public/shares/${token}`, {
+      headers: { cookie },
+    });
+    assert.equal(contentResponse.status, 200);
+    assert.equal(((await contentResponse.json()) as PublicShareContent).type, "text");
+
+    current.services.sharing.resolveClientAddress = () => "127.0.0.3";
+    const fourFailures = () => Promise.all(Array.from({ length: 4 }, () =>
+      request(current.services, `/api/public/shares/${token}/verify`, {
+        method: "POST",
+        body: JSON.stringify({ code: "9999" }),
+      }),
+    ));
+    assert.deepEqual((await fourFailures()).map((response) => response.status), [401, 401, 401, 401]);
+    assert.equal((await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "0042" }),
+    })).status, 200);
+    assert.deepEqual((await fourFailures()).map((response) => response.status), [401, 401, 401, 401]);
+
+    current.services.sharing.resolveClientAddress = () => "127.0.0.4";
+    const expiredWindowSource = await keyedDigest(
+      current.services.sharing.secret,
+      "share-source",
+      "127.0.0.4",
+    );
+    await current.services.metadata.saveShareAttempt({
+      shareId: created.share.id,
+      sourceHash: expiredWindowSource,
+      failures: 4,
+      lockedUntil: 0,
+      updatedAt: Date.now() - 16 * 60 * 1000,
+    });
+    assert.equal((await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "9999" }),
+    })).status, 401);
+
+    await request(current.services, "/api/items/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids: [item.id], action: "trash" }),
+    });
+    assert.equal((await request(current.services, `/api/public/shares/${token}`, { headers: { cookie } })).status, 404);
+    await request(current.services, "/api/items/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids: [item.id], action: "restore" }),
+    });
+    assert.equal((await request(current.services, `/api/public/shares/${token}`, { headers: { cookie } })).status, 404);
+    const shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(shares.shares[0]?.status, "revoked");
+  } finally {
+    await current.close();
+  }
+});
+
+test("并发轮换只留下一个有效分享且过期读取不依赖清理任务", async () => {
+  const current = await fixture();
+  try {
+    const item = (await (await request(current.services, "/api/items/text", {
+      method: "POST",
+      body: JSON.stringify({ content: "轮换测试" }),
+    })).json()) as DropItem;
+    const responses = await Promise.all([
+      request(current.services, `/api/items/${item.id}/share`, {
+        method: "POST",
+        body: JSON.stringify({ accessMode: "public", expiresInSeconds: 3_600 }),
+      }),
+      request(current.services, `/api/items/${item.id}/share`, {
+        method: "POST",
+        body: JSON.stringify({ accessMode: "public", expiresInSeconds: 86_400 }),
+      }),
+    ]);
+    const created = await Promise.all(responses.map(async (response) => {
+      assert.equal(response.status, 201);
+      return response.json() as Promise<CreateShareResponse>;
+    }));
+    const statuses = await Promise.all(created.map(({ shareUrl }) => {
+      const token = new URL(shareUrl).pathname.split("/").at(-1)!;
+      return request(current.services, `/api/public/shares/${token}`).then((response) => response.status);
+    }));
+    assert.deepEqual(statuses.sort(), [200, 404]);
+    const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(listed.shares.filter((share) => share.status === "active").length, 1);
+
+    const expiredId = crypto.randomUUID();
+    const expiredToken = await tokenForShare(current.services.sharing.secret, expiredId);
+    await current.services.metadata.createShare({
+      id: expiredId,
+      ownerId: "test-owner",
+      itemId: item.id,
+      tokenHash: await keyedDigest(current.services.sharing.secret, "share-token-hash", expiredToken),
+      accessMode: "public",
+      codeHash: null,
+      now: Date.now() - 2_000,
+      expiresAt: Date.now() - 1_000,
+    });
+    assert.equal((await request(current.services, `/api/public/shares/${expiredToken}`)).status, 404);
+
+    const cleanupNow = Date.now();
+    const staleId = crypto.randomUUID();
+    const staleToken = await tokenForShare(current.services.sharing.secret, staleId);
+    const staleTokenHash = await keyedDigest(
+      current.services.sharing.secret,
+      "share-token-hash",
+      staleToken,
+    );
+    await current.services.metadata.createShare({
+      id: staleId,
+      ownerId: "test-owner",
+      itemId: item.id,
+      tokenHash: staleTokenHash,
+      accessMode: "public",
+      codeHash: null,
+      now: cleanupNow - 32 * 24 * 60 * 60 * 1000,
+      expiresAt: cleanupNow - 31 * 24 * 60 * 60 * 1000,
+    });
+    await current.services.metadata.saveShareAttempt({
+      shareId: staleId,
+      sourceHash: "stale-source-digest",
+      failures: 1,
+      lockedUntil: 0,
+      updatedAt: cleanupNow - 31 * 24 * 60 * 60 * 1000,
+    });
+    await runCleanup(current.services, cleanupNow);
+    assert.equal(await current.services.metadata.getShareByTokenHash(staleTokenHash), null);
+    assert.equal(await current.services.metadata.getShareAttempt(staleId, "stale-source-digest"), null);
+  } finally {
+    await current.close();
+  }
+});
+
+test("全局开关立即暂停分享且导出不包含访问秘密", async () => {
+  const current = await fixture();
+  try {
+    const item = (await (await request(current.services, "/api/items/text", {
+      method: "POST",
+      body: JSON.stringify({ content: "导出安全测试" }),
+    })).json()) as DropItem;
+    const created = (await (await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "code", code: "0042", expiresInSeconds: 3_600 }),
+    })).json()) as CreateShareResponse;
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    await request(current.services, `/api/public/shares/${token}/verify`, {
+      method: "POST",
+      body: JSON.stringify({ code: "9999" }),
+    });
+
+    current.services.sharing.enabled = false;
+    assert.equal((await request(current.services, `/api/public/shares/${token}`)).status, 404);
+    assert.equal((await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "public", expiresInSeconds: 3_600 }),
+    })).status, 403);
+    current.services.sharing.enabled = true;
+    assert.equal((await request(current.services, `/api/public/shares/${token}`)).status, 401);
+
+    const exported = await (await request(current.services, "/api/export")).text();
+    assert.match(exported, /"version": 2/);
+    assert.match(exported, /"accessMode": "code"/);
+    assert.doesNotMatch(exported, /tokenHash|codeHash|sourceHash|drop_share_access|#code=|0042/);
+  } finally {
+    await current.close();
+  }
+});
+
+test("公开文件分享支持单区间下载并可立即撤销", async () => {
+  const current = await fixture();
+  try {
+    const bytes = new TextEncoder().encode("0123456789");
+    const upload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "range.txt",
+        mimeType: "text/plain",
+        sizeBytes: bytes.byteLength,
+        fingerprint: "range.txt:10:1",
+      }),
+    })).json()) as UploadSession;
+    await request(current.services, `/api/uploads/${upload.id}/parts/1`, {
+      method: "PUT",
+      body: bytes,
+      headers: { "content-length": String(bytes.byteLength), "content-type": "application/octet-stream" },
+    });
+    const item = (await (await request(current.services, `/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    })).json()) as DropItem;
+    const created = (await (await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "public", expiresInSeconds: 3_600 }),
+    })).json()) as CreateShareResponse;
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    const partial = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=2-5" },
+    });
+    assert.equal(partial.status, 206);
+    assert.equal(partial.headers.get("content-range"), "bytes 2-5/10");
+    assert.equal(await partial.text(), "2345");
+    assert.equal(partial.headers.get("content-disposition")?.startsWith("attachment"), true);
+    assert.equal(partial.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(partial.headers.get("cache-control"), "private, no-store");
+    const openEnded = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=6-" },
+    });
+    assert.equal(await openEnded.text(), "6789");
+    const suffix = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=-3" },
+    });
+    assert.equal(await suffix.text(), "789");
+    const head = await request(current.services, `/api/public/shares/${token}/download`, { method: "HEAD" });
+    assert.equal(head.status, 200);
+    assert.equal(head.headers.get("content-length"), "10");
+    assert.equal(await head.text(), "");
+    const outOfRange = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=99-" },
+    });
+    assert.equal(outOfRange.status, 416);
+    assert.equal(outOfRange.headers.get("content-range"), "bytes */10");
+    const rangedFromStart = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=0-3" },
+    });
+    assert.equal(rangedFromStart.status, 206);
+    const multiRange = await request(current.services, `/api/public/shares/${token}/download`, {
+      headers: { range: "bytes=0-1,3-4" },
+    });
+    assert.equal(multiRange.status, 416);
+    let shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(shares.shares[0]?.downloadCount, 0);
+    const complete = await request(current.services, `/api/public/shares/${token}/download`);
+    assert.equal(complete.status, 200);
+    assert.equal(await complete.text(), "0123456789");
+    shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(shares.shares[0]?.downloadCount, 1);
+    assert.equal((await request(current.services, `/api/shares/${created.share.id}`, { method: "DELETE" })).status, 200);
+    assert.equal((await request(current.services, `/api/public/shares/${token}/download`)).status, 404);
   } finally {
     await current.close();
   }

@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Drizzle schema 是迁移和类型生成的来源；字段名映射到运行时共享的 snake_case SQL 表。
 export const items = sqliteTable(
@@ -81,3 +81,54 @@ export const authChallenges = sqliteTable(
   },
   (table) => [index("idx_auth_challenges_expires").on(table.expiresAt)],
 );
+
+export const shares = sqliteTable(
+  "shares",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    itemId: text("item_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    accessMode: text("access_mode", { enum: ["public", "code"] }).notNull(),
+    codeHash: text("code_hash"),
+    createdAt: integer("created_at").notNull(),
+    expiresAt: integer("expires_at").notNull(),
+    revokedAt: integer("revoked_at"),
+    accessCount: integer("access_count").notNull().default(0),
+    downloadCount: integer("download_count").notNull().default(0),
+    lastAccessedAt: integer("last_accessed_at"),
+  },
+  (table) => [
+    uniqueIndex("idx_shares_token_hash").on(table.tokenHash),
+    index("idx_shares_owner_created").on(table.ownerId, table.createdAt),
+    index("idx_shares_item_status").on(table.itemId, table.revokedAt, table.expiresAt),
+    index("idx_shares_retention").on(table.expiresAt, table.revokedAt),
+  ],
+);
+
+export const shareAttempts = sqliteTable(
+  "share_attempts",
+  {
+    shareId: text("share_id").notNull(),
+    sourceHash: text("source_hash").notNull(),
+    failures: integer("failures").notNull().default(0),
+    lockedUntil: integer("locked_until").notNull().default(0),
+    updatedAt: integer("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.shareId, table.sourceHash] }),
+    index("idx_share_attempts_updated").on(table.updatedAt),
+  ],
+);
+
+export const schemaVersion = sqliteTable("schema_version", {
+  id: integer("id").primaryKey(),
+  version: integer("version").notNull(),
+});
+
+export const migrationState = sqliteTable("migration_state", {
+  id: text("id").primaryKey(),
+  status: text("status", { enum: ["in_progress", "complete"] }).notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});

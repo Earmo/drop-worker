@@ -23,6 +23,8 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
+        PUBLIC_URL: "https://drop.example.com",
+        SHARING_ENABLED: "true",
         OWNER_EMAIL: "owner@example.com",
         AUTH_EMAIL_PROVIDER: "smtp",
         AUTH_FROM_EMAIL: "",
@@ -39,6 +41,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     assert.equal(config.vars.SMTP_HOST, "smtphz.qiye.163.com");
     assert.equal(config.vars.SMTP_PORT, "994");
     assert.equal(config.vars.SMTP_SECURE, "true");
+    assert.equal(config.vars.PUBLIC_URL, "https://drop.example.com");
     assert.equal(config.send_email, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });

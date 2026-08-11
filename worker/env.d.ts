@@ -8,6 +8,8 @@ interface Env {
   SMTP_TIMEOUT_MS: string;
   SMTP_USERNAME: string;
   SMTP_PASSWORD: string;
+  PUBLIC_URL: string;
+  SHARING_ENABLED: string;
 }
 
 declare namespace Cloudflare {
@@ -21,5 +23,7 @@ declare namespace Cloudflare {
     SMTP_TIMEOUT_MS: string;
     SMTP_USERNAME: string;
     SMTP_PASSWORD: string;
+    PUBLIC_URL: string;
+    SHARING_ENABLED: string;
   }
 }

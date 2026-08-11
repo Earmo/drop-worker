@@ -17,7 +17,9 @@ export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
   // 反向代理会转发原始 Host/Proto；使用它们生成正确的 canonical、OG 图片和 manifest URL。
   const host = requestHeaders.get("x-forwarded-host") || requestHeaders.get("host") || "localhost:3000";
-  const protocol = requestHeaders.get("x-forwarded-proto") || (host.startsWith("localhost") ? "http" : "https");
+  const hostname = new URL(`http://${host}`).hostname;
+  const loopback = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  const protocol = requestHeaders.get("x-forwarded-proto") || (loopback ? "http" : "https");
   const base = new URL(`${protocol}://${host}`);
   const description = "私有、跨设备的文本、链接与文件投递箱。";
   return {
@@ -26,7 +28,13 @@ export async function generateMetadata(): Promise<Metadata> {
     description,
     applicationName: "Drop Worker",
     manifest: "/manifest.webmanifest",
-    icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
+    icons: {
+      icon: [
+        { url: "/favicon.svg", type: "image/svg+xml" },
+        { url: "/icon-192.png", type: "image/png" },
+      ],
+      apple: "/icon-192.png",
+    },
     openGraph: {
       title: "Drop Worker",
       description,

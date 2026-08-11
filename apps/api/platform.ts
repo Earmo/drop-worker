@@ -2,6 +2,7 @@ import type {
   DropItem,
   ItemType,
   ListItemsResponse,
+  ShareAccessMode,
   StorageSummary,
   UploadedPart,
   UploadSession,
@@ -27,6 +28,45 @@ export type UploadRecord = Omit<UploadSession, "status"> & {
   providerUploadId: string;
 };
 
+export type StoredShare = {
+  id: string;
+  ownerId: string;
+  itemId: string;
+  tokenHash: string;
+  accessMode: ShareAccessMode;
+  codeHash: string | null;
+  createdAt: number;
+  expiresAt: number;
+  revokedAt: number | null;
+  accessCount: number;
+  downloadCount: number;
+  lastAccessedAt: number | null;
+  item: StoredItem;
+};
+
+export type ShareAttemptRecord = {
+  shareId: string;
+  sourceHash: string;
+  failures: number;
+  lockedUntil: number;
+  updatedAt: number;
+};
+
+export type AuthSessionRecord = {
+  ownerId: string;
+  email: string;
+  expiresAt: number;
+};
+
+export type AuthChallengeRecord = {
+  id: string;
+  email: string;
+  codeHash: string;
+  attempts: number;
+  createdAt: number;
+  expiresAt: number;
+};
+
 // 列表筛选统一由存储层实现；cursor 是 offset，limit 的上限由 contracts schema 限制。
 export type ListOptions = {
   type?: ItemType;
@@ -39,7 +79,9 @@ export type ListOptions = {
 };
 
 export interface MetadataStore {
+  healthCheck(): Promise<void>;
   ensureSchema(): Promise<void>;
+  ensureApplicationReady(): Promise<void>;
   listItems(ownerId: string, options: ListOptions): Promise<ListItemsResponse>;
   getItem(ownerId: string, id: string): Promise<StoredItem | null>;
   createItem(input: {
@@ -86,17 +128,68 @@ export interface MetadataStore {
   listExpiredUploads(now: number): Promise<UploadRecord[]>;
   listExpiredTrash(before: number): Promise<StoredItem[]>;
   listAllForExport(ownerId: string): Promise<DropItem[]>;
+  createShare(input: {
+    id: string;
+    ownerId: string;
+    itemId: string;
+    tokenHash: string;
+    accessMode: ShareAccessMode;
+    codeHash: string | null;
+    now: number;
+    expiresAt: number;
+  }): Promise<StoredShare | null>;
+  listShares(ownerId: string, now: number, historyAfter: number): Promise<StoredShare[]>;
+  getShareByTokenHash(tokenHash: string): Promise<StoredShare | null>;
+  revokeShare(ownerId: string, id: string, now: number): Promise<StoredShare | null>;
+  recordShareAccess(id: string, now: number, download: boolean): Promise<void>;
+  getShareAttempt(shareId: string, sourceHash: string): Promise<ShareAttemptRecord | null>;
+  recordShareFailure(shareId: string, sourceHash: string, now: number): Promise<ShareAttemptRecord>;
+  saveShareAttempt(record: ShareAttemptRecord): Promise<void>;
+  deleteShareAttempt(shareId: string, sourceHash: string): Promise<void>;
+  deleteExpiredShares(before: number, attemptsBefore: number): Promise<void>;
+  getAuthSession(tokenHash: string, now: number): Promise<AuthSessionRecord | null>;
+  createAuthSession(input: {
+    id: string;
+    tokenHash: string;
+    ownerId: string;
+    email: string;
+    createdAt: number;
+    expiresAt: number;
+  }): Promise<void>;
+  deleteAuthSession(tokenHash: string): Promise<void>;
+  createAuthChallenge(input: AuthChallengeRecord): Promise<void>;
+  getAuthChallenge(id: string, email: string): Promise<AuthChallengeRecord | null>;
+  incrementAuthChallengeAttempts(id: string): Promise<void>;
+  deleteAuthChallenge(id: string): Promise<void>;
+  isPortableTargetEmpty(): Promise<boolean>;
+  listPortableItems(): Promise<StoredItem[]>;
+  listPortableShares(): Promise<StoredShare[]>;
+  listPortablePendingUploads(): Promise<UploadRecord[]>;
+  discardPortableUpload(ownerId: string, id: string): Promise<void>;
+  importPortableItem(item: StoredItem): Promise<void>;
+  importPortableShare(share: Omit<StoredShare, "item">): Promise<void>;
+  preparePortableImport(migrationId: string, now: number, blobsEmpty: boolean): Promise<"new" | "resume" | "rejected">;
+  finishPortableImport(migrationId: string, now: number): Promise<void>;
   deleteExpiredSessions(now: number): Promise<void>;
 }
 
 export type BlobObject = {
   body: ReadableStream<Uint8Array>;
   size: number;
+  totalSize: number;
+  rangeOffset: number;
   contentType: string;
   etag?: string;
 };
 
+export type BlobRange = {
+  offset: number;
+  length: number;
+};
+
 export interface BlobStore {
+  healthCheck(): Promise<void>;
+  isEmpty(): Promise<boolean>;
   createMultipart(objectKey: string, contentType: string): Promise<string>;
   putPart(
     objectKey: string,
@@ -111,7 +204,7 @@ export interface BlobStore {
     contentType: string,
   ): Promise<void>;
   abortMultipart(objectKey: string, uploadId: string): Promise<void>;
-  get(objectKey: string): Promise<BlobObject | null>;
+  get(objectKey: string, range?: BlobRange): Promise<BlobObject | null>;
   size(objectKey: string): Promise<number | null>;
   delete(objectKey: string): Promise<void>;
 }
@@ -123,5 +216,11 @@ export type RuntimeServices = {
   resolveIdentity(request: Request): Promise<Identity | null>;
   authMode: "platform" | "password" | "smtp-otp" | "development";
   insecureHttp: boolean;
+  sharing: {
+    enabled: boolean;
+    publicUrl: URL;
+    secret: string;
+    resolveClientAddress(request: Request): string;
+  };
   handleAuthRequest?(request: Request): Promise<Response | null>;
 };

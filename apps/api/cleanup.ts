@@ -46,6 +46,10 @@ export async function runCleanup(services: RuntimeServices, now = Date.now()): P
     }
   }
   // 会话和验证码只保留到期时间，清理它们不会影响仍在有效期内的登录设备。
+  await services.metadata.deleteExpiredShares(
+    now - 30 * 24 * 60 * 60 * 1000,
+    now - 15 * 60 * 1000,
+  );
   await services.metadata.deleteExpiredSessions(now);
   return { expiredUploads: expiredCount, purgedItems };
 }

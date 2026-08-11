@@ -123,6 +123,82 @@ export const authStatusSchema = z.object({
 });
 export type AuthStatus = z.infer<typeof authStatusSchema>;
 
+export const shareAccessModeSchema = z.enum(["public", "code"]);
+export type ShareAccessMode = z.infer<typeof shareAccessModeSchema>;
+
+export const shareStatusSchema = z.enum(["active", "expired", "revoked"]);
+export type ShareStatus = z.infer<typeof shareStatusSchema>;
+
+export const shareExpirySecondsSchema = z.union([
+  z.literal(60 * 60),
+  z.literal(24 * 60 * 60),
+  z.literal(7 * 24 * 60 * 60),
+  z.literal(30 * 24 * 60 * 60),
+]);
+export type ShareExpirySeconds = z.infer<typeof shareExpirySecondsSchema>;
+
+export const createShareSchema = z
+  .object({
+    accessMode: shareAccessModeSchema,
+    expiresInSeconds: shareExpirySecondsSchema.default(7 * 24 * 60 * 60),
+    code: z.string().regex(/^\d{4}$/).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.accessMode === "public" && value.code !== undefined) {
+      context.addIssue({ code: "custom", message: "公开分享不能设置口令", path: ["code"] });
+    }
+  });
+
+export const shareSummarySchema = z.object({
+  id: z.string().uuid(),
+  itemId: z.string().uuid(),
+  itemType: z.enum(["text", "file"]),
+  itemLabel: z.string(),
+  accessMode: shareAccessModeSchema,
+  status: shareStatusSchema,
+  createdAt: z.number().int(),
+  expiresAt: z.number().int(),
+  revokedAt: z.number().int().nullable(),
+  accessCount: z.number().int().nonnegative(),
+  downloadCount: z.number().int().nonnegative(),
+  lastAccessedAt: z.number().int().nullable(),
+  shareUrl: z.string().url().nullable(),
+});
+export type ShareSummary = z.infer<typeof shareSummarySchema>;
+
+export const createShareResponseSchema = z.object({
+  share: shareSummarySchema,
+  shareUrl: z.string().url(),
+  generatedCode: z.string().regex(/^\d{4}$/).nullable(),
+});
+export type CreateShareResponse = z.infer<typeof createShareResponseSchema>;
+
+export const publicShareContentSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("text"),
+    content: z.string(),
+    updatedAt: z.number().int(),
+    expiresAt: z.number().int(),
+  }),
+  z.object({
+    type: z.literal("file"),
+    fileName: z.string(),
+    mimeType: z.string(),
+    sizeBytes: z.number().int().nonnegative(),
+    updatedAt: z.number().int(),
+    expiresAt: z.number().int(),
+  }),
+]);
+export type PublicShareContent = z.infer<typeof publicShareContentSchema>;
+
+export const verifyShareSchema = z.object({
+  code: z.string().regex(/^\d{4}$/),
+});
+
+export type ListSharesResponse = {
+  shares: ShareSummary[];
+};
+
 export type ListItemsResponse = {
   items: DropItem[];
   nextCursor: number | null;
@@ -138,7 +214,8 @@ export type ApiError = {
 
 export type ExportBundle = {
   format: "drop-worker-export";
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   items: DropItem[];
+  shares?: Array<Omit<ShareSummary, "shareUrl">>;
 };

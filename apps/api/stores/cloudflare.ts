@@ -1,9 +1,17 @@
 import type { UploadedPart } from "../../../packages/contracts";
-import type { BlobObject, BlobStore } from "../platform";
+import type { BlobObject, BlobRange, BlobStore } from "../platform";
 import { SqlMetadataStore, type SqlExecutor, type SqlValue } from "./sql-metadata";
 
 class D1Executor implements SqlExecutor {
   constructor(private readonly database: D1Database) {}
+
+  async tableExists(name: string): Promise<boolean> {
+    const row = await this.database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .bind(name)
+      .first<{ name: string }>();
+    return Boolean(row);
+  }
 
   async all<T>(sql: string, params: SqlValue[] = []): Promise<T[]> {
     const result = await this.database.prepare(sql).bind(...params).all<T>();
@@ -34,6 +42,14 @@ export function createD1MetadataStore(database: D1Database): SqlMetadataStore {
 
 export class R2BlobStore implements BlobStore {
   constructor(private readonly bucket: R2Bucket) {}
+
+  async healthCheck(): Promise<void> {
+    await this.bucket.head("drop-worker-healthcheck-missing");
+  }
+
+  async isEmpty(): Promise<boolean> {
+    return (await this.bucket.list({ limit: 1 })).objects.length === 0;
+  }
 
   async createMultipart(objectKey: string, contentType: string): Promise<string> {
     const upload = await this.bucket.createMultipartUpload(objectKey, {
@@ -78,12 +94,23 @@ export class R2BlobStore implements BlobStore {
     }
   }
 
-  async get(objectKey: string): Promise<BlobObject | null> {
-    const object = await this.bucket.get(objectKey);
+  async get(objectKey: string, range?: BlobRange): Promise<BlobObject | null> {
+    const object = await this.bucket.get(
+      objectKey,
+      range ? { range: { offset: range.offset, length: range.length } } : undefined,
+    );
     if (!object) return null;
+    const returnedLength = object.range && "length" in object.range && object.range.length !== undefined
+      ? object.range.length
+      : object.size;
+    const rangeOffset = object.range && "offset" in object.range && object.range.offset !== undefined
+      ? object.range.offset
+      : range?.offset ?? 0;
     return {
       body: object.body,
-      size: object.size,
+      size: returnedLength,
+      totalSize: object.size,
+      rangeOffset,
       contentType: object.httpMetadata?.contentType ?? "application/octet-stream",
       etag: object.httpEtag,
     };

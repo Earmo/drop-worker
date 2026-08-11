@@ -24,6 +24,8 @@ import {
   RotateCcw,
   Search,
   Send,
+  Share2,
+  ShieldCheck,
   Sparkles,
   Star,
   Sun,
@@ -34,9 +36,12 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthStatus,
+  CreateShareResponse,
   DropItem,
   ItemType,
   ListItemsResponse,
+  ListSharesResponse,
+  ShareSummary,
   StorageSummary,
   UploadSession,
 } from "../packages/contracts";
@@ -50,7 +55,7 @@ import {
   type UploadTask,
 } from "./client/uploads";
 
-type View = "timeline" | "favorites" | "cleanup" | "trash";
+type View = "timeline" | "favorites" | "shares" | "cleanup" | "trash";
 type Theme = "system" | "light" | "dark";
 function TypeIcon({ type }: { type: ItemType }) {
   if (type === "text") return <FileText size={17} />;
@@ -78,6 +83,8 @@ export function DropApp() {
   const [cleanupAge, setCleanupAge] = useState("all");
   const [cleanupSize, setCleanupSize] = useState("all");
   const [sharedDraft, setSharedDraft] = useState("");
+  const [shares, setShares] = useState<ShareSummary[]>([]);
+  const [shareTarget, setShareTarget] = useState<DropItem | null>(null);
   const refreshVersion = useRef(0);
 
   useEffect(() => {
@@ -148,9 +155,10 @@ export function DropApp() {
       if (!quiet) setLoading(true);
       try {
         // 列表和存储摘要并行加载；current 防止较慢的旧请求覆盖用户刚切换筛选条件后的新结果。
-        const [list, summary] = await Promise.all([
+        const [list, summary, shareList] = await Promise.all([
           api<ListItemsResponse>(`/api/items?${listParams()}`),
           api<StorageSummary>("/api/storage"),
+          api<ListSharesResponse>("/api/shares"),
         ]);
         if (current !== refreshVersion.current) return;
         if (preserveLoaded) {
@@ -164,6 +172,7 @@ export function DropApp() {
           setNextCursor(list.nextCursor);
         }
         setStorage(summary);
+        setShares(shareList.shares);
         setClock(Date.now());
       } catch (error) {
         if (!quiet) showNotice(error instanceof Error ? error.message : "加载失败");
@@ -420,6 +429,11 @@ export function DropApp() {
     return new Set([...groups.values()].filter((group) => group.length > 1).flat());
   }, [items]);
 
+  const activeSharesByItem = useMemo(
+    () => new Map(shares.filter((share) => share.status === "active").map((share) => [share.itemId, share])),
+    [shares],
+  );
+
   const selectedBytes = visibleItems
     .filter((item) => selected.has(item.id) && item.type === "file")
     .reduce((total, item) => total + item.sizeBytes, 0);
@@ -429,7 +443,15 @@ export function DropApp() {
   }
 
   const viewTitle =
-    view === "timeline" ? "时间流" : view === "favorites" ? "收藏" : view === "cleanup" ? "存储清理" : "回收站";
+    view === "timeline"
+      ? "时间流"
+      : view === "favorites"
+        ? "收藏"
+        : view === "shares"
+          ? "分享"
+          : view === "cleanup"
+            ? "存储清理"
+            : "回收站";
 
   return (
     <div className="app-shell">
@@ -457,7 +479,7 @@ export function DropApp() {
             <p className="workspace-eyebrow">{auth.email}</p>
             <h1>{viewTitle}</h1>
           </div>
-          <div className="search-field">
+          {view !== "shares" && <div className="search-field">
             <Search size={17} />
             <input
               value={query}
@@ -470,7 +492,7 @@ export function DropApp() {
                 <X size={15} />
               </button>
             )}
-          </div>
+          </div>}
         </header>
 
         {auth.insecureHttp && (
@@ -520,7 +542,20 @@ export function DropApp() {
             </>
           )}
 
-          <div className="feed-toolbar">
+          {view === "shares" && (
+            <ShareManager
+              shares={shares}
+              onCopy={(url) => void navigator.clipboard.writeText(url).then(() => showNotice("分享链接已复制"))}
+              onRevoke={async (share) => {
+                if (!window.confirm(`撤销“${share.itemLabel}”的分享？旧链接将立即失效。`)) return;
+                await api(`/api/shares/${share.id}`, { method: "DELETE" });
+                showNotice("分享已撤销");
+                await loadData(true, false);
+              }}
+            />
+          )}
+
+          {view !== "shares" && <><div className="feed-toolbar">
             <div className="segmented" aria-label="类型筛选">
               {(["all", "text", "link", "file"] as const).map((value) => (
                 <button
@@ -590,6 +625,7 @@ export function DropApp() {
                   selected={selected.has(item.id)}
                   trash={view === "trash"}
                   suspectedDuplicate={duplicateIds.has(item.id)}
+                  activeShare={activeSharesByItem.get(item.id) || null}
                   onSelect={(checked) =>
                     setSelected((current) => {
                       const next = new Set(current);
@@ -602,6 +638,7 @@ export function DropApp() {
                   onTrash={() => void runItemAction([item.id], "trash")}
                   onRestore={() => void runItemAction([item.id], "restore")}
                   onPurge={() => void runItemAction([item.id], "purge")}
+                  onShare={() => setShareTarget(item)}
                   onNotice={showNotice}
                 />
               ))
@@ -614,11 +651,21 @@ export function DropApp() {
                 {loadingMore ? "正在加载" : "加载更多"}
               </button>
             </div>
-          )}
+          )}</>}
         </section>
       </main>
 
       {notice && <div className="toast" role="status">{notice}</div>}
+      {shareTarget && (
+        <ShareDialog
+          item={shareTarget}
+          existing={activeSharesByItem.get(shareTarget.id) || null}
+          onClose={() => setShareTarget(null)}
+          onCreated={async () => {
+            await loadData(true, false);
+          }}
+        />
+      )}
       <MobileNav view={view} onView={changeView} />
     </div>
   );
@@ -648,6 +695,7 @@ function Sidebar({
   const nav = [
     { value: "timeline" as const, label: "时间流", icon: ArchiveRestore },
     { value: "favorites" as const, label: "收藏", icon: Star },
+    { value: "shares" as const, label: "分享", icon: Share2 },
     { value: "cleanup" as const, label: "存储清理", icon: HardDrive },
     { value: "trash" as const, label: "回收站", icon: Trash2 },
   ];
@@ -824,17 +872,173 @@ function UploadQueue({
   );
 }
 
+function ShareManager({
+  shares,
+  onCopy,
+  onRevoke,
+}: {
+  shares: ShareSummary[];
+  onCopy(url: string): void;
+  onRevoke(share: ShareSummary): Promise<void>;
+}) {
+  const activeCount = shares.filter((share) => share.status === "active").length;
+  return (
+    <section className="share-manager" aria-label="分享管理">
+      <div className="share-manager-heading">
+        <div><p>外部访问</p><h2>{activeCount} 个有效分享</h2></div>
+        <span><ShieldCheck size={16} /> 历史保留 30 天</span>
+      </div>
+      {shares.length === 0 ? (
+        <div className="empty-state share-empty">
+          <Share2 size={24} />
+          <strong>还没有分享</strong>
+          <span>在文本或文件条目上点击分享按钮</span>
+        </div>
+      ) : (
+        <div className="share-list">
+          {shares.map((share) => (
+            <article className={`share-row status-${share.status}`} key={share.id}>
+              <span className="share-row-icon">{share.itemType === "file" ? <File size={18} /> : <FileText size={18} />}</span>
+              <div className="share-row-main">
+                <div className="share-row-title"><strong>{share.itemLabel}</strong><span>{share.status === "active" ? "有效" : share.status === "expired" ? "已过期" : "已撤销"}</span></div>
+                <div className="share-row-meta">
+                  <span>{share.accessMode === "public" ? "公开访问" : "口令确认"}</span>
+                  <span>到期 {formatTime(share.expiresAt)}</span>
+                  <span>访问 {share.accessCount} · 下载 {share.downloadCount}</span>
+                  {share.lastAccessedAt && <span>最近 {formatTime(share.lastAccessedAt)}</span>}
+                </div>
+              </div>
+              <div className="share-row-actions">
+                {share.status === "active" && share.shareUrl && (
+                  <button onClick={() => onCopy(share.shareUrl!)} title="复制分享链接" aria-label="复制分享链接"><Copy size={16} /></button>
+                )}
+                {share.status === "active" && share.accessMode === "code" && (
+                  <span className="share-once-note">完整链接仅创建时可见</span>
+                )}
+                {share.status === "active" && (
+                  <button className="danger" onClick={() => void onRevoke(share)} title="撤销分享" aria-label="撤销分享"><X size={16} /></button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ShareDialog({
+  item,
+  existing,
+  onClose,
+  onCreated,
+}: {
+  item: DropItem;
+  existing: ShareSummary | null;
+  onClose(): void;
+  onCreated(): Promise<void>;
+}) {
+  const [accessMode, setAccessMode] = useState<"public" | "code">("code");
+  const [expiresInSeconds, setExpiresInSeconds] = useState(7 * 24 * 60 * 60);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<CreateShareResponse | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const create = async () => {
+    if (busy || (accessMode === "code" && code.length > 0 && code.length !== 4)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await api<CreateShareResponse>(`/api/items/${item.id}/share`, {
+        method: "POST",
+        body: JSON.stringify({
+          accessMode,
+          expiresInSeconds,
+          ...(accessMode === "code" && code ? { code } : {}),
+        }),
+      });
+      setResult(response);
+      await onCreated();
+    } catch (candidate) {
+      setError(candidate instanceof Error ? candidate.message : "创建分享失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+        <header>
+          <div><p>临时分享</p><h2 id="share-dialog-title">{item.type === "file" ? item.displayName || item.originalName : "共享文本"}</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={17} /></button>
+        </header>
+        {result ? (
+          <div className="share-created">
+            <span className="share-created-icon"><Check size={22} /></span>
+            <div><h3>分享已创建</h3><p>{result.share.accessMode === "code" ? "完整链接包含预填口令，只会显示这一次。" : "链接在到期或撤销前可访问。"}</p></div>
+            <div className="share-url-field"><input readOnly value={result.shareUrl} aria-label="分享链接" /><button onClick={() => {
+              void navigator.clipboard.writeText(result.shareUrl).then(() => setCopied(true));
+            }}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "已复制" : "复制"}</button></div>
+            <button className="dialog-done" onClick={onClose}>完成</button>
+          </div>
+        ) : (
+          <div className="share-dialog-body">
+            {existing && <div className="share-replace-warning">重新创建会立即撤销当前有效链接。</div>}
+            <fieldset>
+              <legend>访问方式</legend>
+              <div className="share-mode-control">
+                <button className={accessMode === "public" ? "active" : ""} onClick={() => setAccessMode("public")}><Share2 size={16} /> 公开</button>
+                <button className={accessMode === "code" ? "active" : ""} onClick={() => setAccessMode("code")}><ShieldCheck size={16} /> 四位口令</button>
+              </div>
+            </fieldset>
+            {accessMode === "code" && (
+              <label className="share-code-field">四位口令
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 4))}
+                  inputMode="numeric"
+                  pattern="[0-9]{4}"
+                  maxLength={4}
+                  placeholder="留空则自动生成"
+                  autoComplete="off"
+                />
+              </label>
+            )}
+            <label className="share-expiry-field">有效期
+              <select value={expiresInSeconds} onChange={(event) => setExpiresInSeconds(Number(event.target.value))}>
+                <option value={60 * 60}>1 小时</option>
+                <option value={24 * 60 * 60}>1 天</option>
+                <option value={7 * 24 * 60 * 60}>7 天</option>
+                <option value={30 * 24 * 60 * 60}>30 天</option>
+              </select>
+            </label>
+            {error && <div className="form-error" role="alert">{error}</div>}
+            <div className="share-dialog-actions"><button onClick={onClose}>取消</button><button className="share-create-button" onClick={() => void create()} disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : <Share2 size={16} />} 创建分享</button></div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ItemEntry({
   item,
   now,
   selected,
   trash,
   suspectedDuplicate,
+  activeShare,
   onSelect,
   onUpdate,
   onTrash,
   onRestore,
   onPurge,
+  onShare,
   onNotice,
 }: {
   item: DropItem;
@@ -842,11 +1046,13 @@ function ItemEntry({
   selected: boolean;
   trash: boolean;
   suspectedDuplicate: boolean;
+  activeShare: ShareSummary | null;
   onSelect(value: boolean): void;
   onUpdate(id: string, changes: Record<string, unknown>): Promise<void>;
   onTrash(): void;
   onRestore(): void;
   onPurge(): void;
+  onShare(): void;
   onNotice(message: string): void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -876,6 +1082,7 @@ function ItemEntry({
           <span>{typeLabel(item.type)}</span><span>·</span><time>{formatTime(item.createdAt)}</time>
           {item.updatedAt > item.createdAt + 1000 && <span>已编辑</span>}
           {suspectedDuplicate && <span className="duplicate-tag">疑似重复</span>}
+          {activeShare && <span className="share-active-tag"><Share2 size={11} /> 分享中</span>}
           {trash && item.deletedAt && <span>剩余 {Math.max(0, 30 - Math.floor((now - item.deletedAt) / 86_400_000))} 天</span>}
         </div>
         {editing ? (
@@ -942,6 +1149,11 @@ function ItemEntry({
           ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /></button>
         )}
         {!trash && <button onClick={() => setEditing(true)} aria-label="编辑" title="编辑"><Pencil size={16} /></button>}
+        {!trash && (item.type === "text" || item.type === "file") && (
+          <button className={activeShare ? "active-share" : ""} onClick={onShare} aria-label="分享" title="分享">
+            <Share2 size={16} />
+          </button>
+        )}
         {(item.type === "text" || item.type === "link") && !trash && (
           <button onClick={() => void copy().then(() => onNotice("已复制"))} aria-label="复制" title="复制">
             {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -1057,7 +1269,13 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus | null; onAut
         ) : auth.mode === "platform" ? (
           <button className="primary-login" onClick={() => window.location.reload()}><RotateCcw size={17} /> 重新验证身份</button>
         ) : (
-          <div className="login-form">
+          <form
+            className="login-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submit();
+            }}
+          >
             <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" /></label>
             {auth.mode === "password" ? (
               <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label>
@@ -1065,11 +1283,11 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus | null; onAut
               <label>验证码<input inputMode="numeric" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} autoComplete="one-time-code" /></label>
             ) : null}
             {error && <p className="form-error">{error}</p>}
-            <button className="primary-login" onClick={() => void submit()} disabled={busy}>
+            <button className="primary-login" type="submit" disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={17} /> : <ArrowDownToLine size={17} />}
               {auth.mode === "smtp-otp" && !challengeId ? "发送验证码" : "登录"}
             </button>
-          </div>
+          </form>
         )}
         {auth?.insecureHttp && <p className="login-warning">当前连接未使用 HTTPS。</p>}
       </section>
@@ -1096,6 +1314,7 @@ function MobileNav({ view, onView }: { view: View; onView(view: View): void }) {
   const values = [
     { value: "timeline" as const, icon: ArchiveRestore, label: "时间流" },
     { value: "favorites" as const, icon: Star, label: "收藏" },
+    { value: "shares" as const, icon: Share2, label: "分享" },
     { value: "cleanup" as const, icon: HardDrive, label: "清理" },
     { value: "trash" as const, icon: Trash2, label: "回收站" },
   ];

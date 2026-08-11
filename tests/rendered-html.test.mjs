@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-async function render() {
+async function render(path = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
   return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    new Request(`http://localhost${path}`, { headers: { accept: "text/html" } }),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
@@ -22,6 +22,13 @@ test("服务端输出 Drop Worker 应用外壳", async () => {
   assert.match(html, /manifest\.webmanifest/);
   assert.match(html, /Drop Worker/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
+});
+
+test("公开分享页面禁止缓存和搜索引擎收录", async () => {
+  const response = await render(`/s/${"a".repeat(43)}`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow, noarchive");
 });
 
 test("成品源码包含核心工作区且不再引用预览骨架", async () => {

@@ -1,0 +1,79 @@
+name: 外部存储集成测试
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  adapters:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: dropworker
+          POSTGRES_PASSWORD: dropworker-test
+          POSTGRES_DB: dropworker
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dropworker -d dropworker"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_USER: dropworker
+          MYSQL_PASSWORD: dropworker-test
+          MYSQL_DATABASE: dropworker
+          MYSQL_ROOT_PASSWORD: root-test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot-test"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: 启动 MinIO
+        run: >-
+          docker run -d --name minio -p 9000:9000
+          -e MINIO_ROOT_USER=dropworker -e MINIO_ROOT_PASSWORD=dropworker-test-secret
+          minio/minio:latest server /data
+      - name: 创建私有测试桶
+        run: >-
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c
+          'until mc alias set local http://127.0.0.1:9000 dropworker dropworker-test-secret; do sleep 2; done;
+          mc mb --ignore-existing local/drop-worker'
+      - name: PostgreSQL 与 MinIO
+        env:
+          RUN_EXTERNAL_STORAGE_TESTS: "true"
+          DATABASE_DRIVER: postgres
+          DATABASE_URL: postgresql://dropworker:dropworker-test@127.0.0.1:5432/dropworker
+          BLOB_DRIVER: s3
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_ALLOW_INSECURE: "true"
+          S3_REGION: us-east-1
+          S3_BUCKET: drop-worker
+          S3_PREFIX: integration-postgres/
+          S3_FORCE_PATH_STYLE: "true"
+          S3_ACCESS_KEY_ID: dropworker
+          S3_SECRET_ACCESS_KEY: dropworker-test-secret
+        run: node --import tsx --test tests/external-storage.test.ts
+      - name: MySQL 与 MinIO
+        env:
+          RUN_EXTERNAL_STORAGE_TESTS: "true"
+          DATABASE_DRIVER: mysql
+          DATABASE_URL: mysql://dropworker:dropworker-test@127.0.0.1:3306/dropworker
+          BLOB_DRIVER: s3
+          S3_ENDPOINT: http://127.0.0.1:9000
+          S3_ALLOW_INSECURE: "true"
+          S3_REGION: us-east-1
+          S3_BUCKET: drop-worker
+          S3_PREFIX: integration-mysql/
+          S3_FORCE_PATH_STYLE: "true"
+          S3_ACCESS_KEY_ID: dropworker
+          S3_SECRET_ACCESS_KEY: dropworker-test-secret
+        run: node --import tsx --test tests/external-storage.test.ts

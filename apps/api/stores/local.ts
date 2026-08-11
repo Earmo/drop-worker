@@ -4,6 +4,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   rm,
   stat,
@@ -14,11 +15,18 @@ import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import type { UploadedPart } from "../../../packages/contracts";
-import type { BlobObject, BlobStore } from "../platform";
+import type { BlobObject, BlobRange, BlobStore } from "../platform";
 import { SqlMetadataStore, type SqlExecutor, type SqlValue } from "./sql-metadata";
 
 class NodeSqliteExecutor implements SqlExecutor {
   constructor(private readonly database: DatabaseSync) {}
+
+  async tableExists(name: string): Promise<boolean> {
+    const row = this.database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name);
+    return Boolean(row);
+  }
 
   async all<T>(sql: string, params: SqlValue[] = []): Promise<T[]> {
     return this.database.prepare(sql).all(...params) as T[];
@@ -89,6 +97,15 @@ export class LocalBlobStore implements BlobStore {
     ]);
   }
 
+  async healthCheck(): Promise<void> {
+    await this.prepare();
+  }
+
+  async isEmpty(): Promise<boolean> {
+    await this.prepare();
+    return (await readdir(this.objectsRoot)).length === 0;
+  }
+
   async createMultipart(objectKey: string, contentType: string): Promise<string> {
     void objectKey;
     void contentType;
@@ -140,7 +157,7 @@ export class LocalBlobStore implements BlobStore {
     await rm(safeStoragePath(this.uploadsRoot, uploadId), { recursive: true, force: true });
   }
 
-  async get(objectKey: string): Promise<BlobObject | null> {
+  async get(objectKey: string, range?: BlobRange): Promise<BlobObject | null> {
     const path = safeStoragePath(this.objectsRoot, objectKey);
     let info;
     try {
@@ -162,8 +179,20 @@ export class LocalBlobStore implements BlobStore {
     } catch {
       contentType = "application/octet-stream";
     }
-    const body = Readable.toWeb(createReadStream(path)) as ReadableStream<Uint8Array>;
-    return { body, size: info.size, contentType };
+    const offset = range?.offset ?? 0;
+    const length = range?.length ?? info.size;
+    if (offset < 0 || length <= 0 || offset + length > info.size) return null;
+    const body = Readable.toWeb(createReadStream(path, {
+      start: offset,
+      end: offset + length - 1,
+    })) as ReadableStream<Uint8Array>;
+    return {
+      body,
+      size: length,
+      totalSize: info.size,
+      rangeOffset: offset,
+      contentType,
+    };
   }
 
   async size(objectKey: string): Promise<number | null> {

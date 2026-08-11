@@ -17,11 +17,12 @@ COPY --from=build /app/server ./server
 COPY --from=build /app/apps ./apps
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/db ./db
+COPY --from=build /app/drizzle ./drizzle
 COPY --from=build /app/tsconfig.json /app/worker-configuration.d.ts ./
 
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 3000
 VOLUME ["/app/data"]
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/api/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/health/ready').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))"
 CMD ["npm", "start"]

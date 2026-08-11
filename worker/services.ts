@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { createD1MetadataStore, R2BlobStore } from "../apps/api/stores/cloudflare";
 import type { Identity, RuntimeServices } from "../apps/api/platform";
+import { validatePublicUrl } from "../apps/api/sharing";
 import { CloudflareEmailAuth } from "./email-auth";
 
 function normalizedEmail(value: string): string {
@@ -12,6 +13,7 @@ async function resolveAccessIdentity(request: Request, env: Env): Promise<Identi
   const sitesUserId = request.headers.get("oai-authenticated-user-id");
   const sitesEmail = request.headers.get("oai-authenticated-user-email");
   if (sitesUserId && sitesEmail) {
+    if (env.OWNER_EMAIL && normalizedEmail(sitesEmail) !== normalizedEmail(env.OWNER_EMAIL)) return null;
     return { ownerId: `sites:${sitesUserId}`, email: sitesEmail };
   }
 
@@ -57,6 +59,11 @@ export function createCloudflareServices(env: Env): RuntimeServices {
   // 每次组装的只是轻量适配器；真正的状态仍保存在 D1/R2，不依赖 Worker 全局可变状态。
   const quota = Number(env.MAX_STORAGE_BYTES || 10 * 1024 * 1024 * 1024);
   const emailAuth = env.AUTH_MODE === "smtp-otp" ? new CloudflareEmailAuth(env) : null;
+  const development = env.AUTH_MODE === "development";
+  if (!development && !env.OWNER_EMAIL) throw new Error("生产环境必须配置 OWNER_EMAIL");
+  const shareSecret = env.AUTH_SESSION_SECRET || (development ? "drop-worker-development-share-secret" : "");
+  if (shareSecret.length < 32) throw new Error("AUTH_SESSION_SECRET 至少需要 32 个字符才能启用分享");
+  const publicUrl = validatePublicUrl(env.PUBLIC_URL || (development ? "http://localhost:3000" : ""));
   return {
     metadata: createD1MetadataStore(env.DB),
     blobs: new R2BlobStore(env.FILES),
@@ -67,6 +74,12 @@ export function createCloudflareServices(env: Env): RuntimeServices {
         ? "development"
         : "platform",
     insecureHttp: false,
+    sharing: {
+      enabled: env.SHARING_ENABLED !== "false",
+      publicUrl,
+      secret: shareSecret,
+      resolveClientAddress: (request) => request.headers.get("cf-connecting-ip") || "unknown",
+    },
     resolveIdentity: (request) => emailAuth
       ? emailAuth.resolveIdentity(request)
       : resolveAccessIdentity(request, env),

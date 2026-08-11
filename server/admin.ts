@@ -7,6 +7,12 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { DropItem, ExportBundle, ListItemsResponse, UploadSession } from "../packages/contracts";
 import { createPasswordHash } from "./local-auth";
+import { migrateConfiguredDatabase } from "./migrate-database";
+import {
+  createPortableBackup,
+  migratePortableStorage,
+  restorePortableBackup,
+} from "./portable-storage";
 
 type PortableManifest = {
   format: "drop-worker-portable-backup";
@@ -22,6 +28,30 @@ type LocalManifest = {
   databaseSha256: string;
   files: Array<{ path: string; sizeBytes: number; sha256: string }>;
 };
+
+export function parseAdminArguments(argv: string[]): {
+  command?: string;
+  argument?: string;
+  revokeShares: boolean;
+} {
+  const [command, ...rest] = argv;
+  const positional: string[] = [];
+  let parseOptions = true;
+
+  for (const value of rest) {
+    if (parseOptions && value === "--") {
+      parseOptions = false;
+    } else if (!parseOptions || !value.startsWith("--")) {
+      positional.push(value);
+    }
+  }
+
+  return {
+    command,
+    argument: positional[0],
+    revokeShares: rest.includes("--revoke-shares"),
+  };
+}
 
 async function hashFile(path: string): Promise<string> {
   // 使用流式哈希，备份大文件时不会把整个对象一次性读入内存。
@@ -180,7 +210,7 @@ export async function remoteRestore(sourceArgument?: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [command, argument] = process.argv.slice(2);
+  const { command, argument, revokeShares } = parseAdminArguments(process.argv.slice(2));
   if (command === "hash-password") {
     const password = argument || process.env.DROP_WORKER_PASSWORD;
     if (!password) throw new Error("请把密码作为参数传入，或设置 DROP_WORKER_PASSWORD");
@@ -195,6 +225,30 @@ async function main(): Promise<void> {
 
   if (command === "remote-restore") {
     await remoteRestore(argument);
+    return;
+  }
+
+  if (command === "migrate-database") {
+    await migrateConfiguredDatabase();
+    return;
+  }
+
+  if (command === "storage-backup") {
+    const result = await createPortableBackup(argument);
+    console.log(`可移植存储备份已创建：${result.destination}`);
+    return;
+  }
+
+  if (command === "storage-restore") {
+    if (!argument) throw new Error("storage-restore 需要提供备份目录");
+    await restorePortableBackup(argument, undefined, revokeShares);
+    console.log("可移植存储备份已恢复。");
+    return;
+  }
+
+  if (command === "migrate-storage") {
+    const destination = await migratePortableStorage(argument, revokeShares);
+    console.log(`存储迁移完成，校验工作目录：${destination}`);
     return;
   }
 
@@ -270,7 +324,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log("用法：npm run admin -- <hash-password|backup|restore|remote-backup|remote-restore> [参数]");
+  console.log("用法：npm run admin -- <hash-password|migrate-database|storage-backup|storage-restore|migrate-storage|backup|restore|remote-backup|remote-restore> [参数]");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

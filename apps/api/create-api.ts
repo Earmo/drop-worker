@@ -1,12 +1,15 @@
 import { Hono } from "hono";
 import {
   bulkActionSchema,
+  createShareSchema,
   createLinkSchema,
   createTextSchema,
   listItemsQuerySchema,
   updateItemSchema,
   uploadCreateSchema,
+  verifyShareSchema,
   type ExportBundle,
+  type PublicShareContent,
 } from "../../packages/contracts";
 import {
   errorResponse,
@@ -16,9 +19,39 @@ import {
   ApiEnv
 } from "./http";
 import type { RuntimeServices } from "./platform";
+import { fileDownloadResponse } from "./download";
+import {
+  createShareCookie,
+  hasShareCookie,
+  keyedDigest,
+  randomShareCode,
+  shareStatus,
+  shareSummary,
+  tokenForShare,
+  verifyKeyedDigest,
+} from "./sharing";
 
 const api = new Hono<ApiEnv>();
 installRequestMiddleware(api);
+
+api.get("/health/live", (c) => c.json({ status: "ok" }));
+api.get("/health/ready", async (c) => {
+  try {
+    await c.env.services.metadata.healthCheck();
+    await c.env.services.metadata.ensureSchema();
+    await c.env.services.metadata.ensureApplicationReady();
+    await c.env.services.blobs.healthCheck();
+    return c.json({ status: "ready" });
+  } catch {
+    return c.json({ status: "unavailable" }, 503);
+  }
+});
+
+api.use("/api/public/shares/*", async (c, next) => {
+  await next();
+  c.header("cache-control", "private, no-store");
+  c.header("x-robots-tag", "noindex, nofollow, noarchive");
+});
 
 api.get("/api/health", (c) =>
   c.json({ status: "ok", name: "drop-worker", time: new Date().toISOString() }),
@@ -38,6 +71,124 @@ api.all("/api/auth/*", async (c) => {
   // 认证路由由部署适配器提供：Cloudflare 使用 D1/Email Service，本地使用 SQLite/Node SMTP。
   const response = await c.env.services.handleAuthRequest?.(c.req.raw);
   return response ?? errorResponse(c.get("requestId"), "NOT_FOUND", "认证操作不存在", 404);
+});
+
+async function resolvePublicShare(services: RuntimeServices, token: string, now: number) {
+  if (!services.sharing.enabled || token.length < 32 || token.length > 128) return null;
+  const tokenHash = await keyedDigest(services.sharing.secret, "share-token-hash", token);
+  const share = await services.metadata.getShareByTokenHash(tokenHash);
+  if (!share || shareStatus(share, now) !== "active") return null;
+  if (share.item.type !== "text" && share.item.type !== "file") return null;
+  return share;
+}
+
+api.get("/api/public/shares/:token", async (c) => {
+  const now = Date.now();
+  const token = c.req.param("token");
+  const share = await resolvePublicShare(c.env.services, token, now);
+  if (!share) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+  if (
+    share.accessMode === "code"
+    && !(await hasShareCookie(c.req.raw, share.id, c.env.services.sharing.secret, now))
+  ) {
+    return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
+  }
+  const content: PublicShareContent = share.item.type === "file"
+    ? {
+        type: "file",
+        fileName: share.item.displayName || share.item.originalName || "download",
+        mimeType: share.item.mimeType || "application/octet-stream",
+        sizeBytes: share.item.sizeBytes,
+        updatedAt: share.item.updatedAt,
+        expiresAt: share.expiresAt,
+      }
+    : {
+        type: "text",
+        content: share.item.content || "",
+        updatedAt: share.item.updatedAt,
+        expiresAt: share.expiresAt,
+      };
+  await c.env.services.metadata.recordShareAccess(share.id, now, false);
+  c.header("cache-control", "private, no-store");
+  c.header("x-robots-tag", "noindex, nofollow, noarchive");
+  return c.json(content);
+});
+
+api.post("/api/public/shares/:token/verify", async (c) => {
+  const now = Date.now();
+  const token = c.req.param("token");
+  const share = await resolvePublicShare(c.env.services, token, now);
+  if (!share || share.accessMode !== "code" || !share.codeHash) {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+  }
+  const parsed = verifyShareSchema.safeParse(await parseJson(c.req.raw));
+  if (!parsed.success) {
+    return errorResponse(c.get("requestId"), "INVALID_SHARE_CODE", "访问口令无效", 400);
+  }
+  const clientAddress = c.env.services.sharing.resolveClientAddress(c.req.raw);
+  const sourceHash = await keyedDigest(c.env.services.sharing.secret, "share-source", clientAddress);
+  const previous = await c.env.services.metadata.getShareAttempt(share.id, sourceHash);
+  if (previous && previous.lockedUntil > now) {
+    return errorResponse(c.get("requestId"), "SHARE_CODE_LOCKED", "尝试次数过多，请稍后再试", 429);
+  }
+  const matches = await verifyKeyedDigest(
+    c.env.services.sharing.secret,
+    "share-code",
+    `${share.id}:${parsed.data.code}`,
+    share.codeHash,
+  );
+  if (!matches) {
+    const attempt = await c.env.services.metadata.recordShareFailure(share.id, sourceHash, now);
+    const locked = attempt.lockedUntil > now;
+    return errorResponse(
+      c.get("requestId"),
+      locked ? "SHARE_CODE_LOCKED" : "INVALID_SHARE_CODE",
+      locked ? "尝试次数过多，请稍后再试" : "访问口令无效",
+      locked ? 429 : 401,
+    );
+  }
+  await c.env.services.metadata.deleteShareAttempt(share.id, sourceHash);
+  const cookie = await createShareCookie({
+    shareId: share.id,
+    token,
+    secret: c.env.services.sharing.secret,
+    expiresAt: share.expiresAt,
+    now,
+    secure: c.env.services.sharing.publicUrl.protocol === "https:",
+  });
+  c.header("set-cookie", cookie);
+  c.header("cache-control", "private, no-store");
+  return c.json({ verified: true, expiresAt: Math.min(share.expiresAt, now + 24 * 60 * 60 * 1000) });
+});
+
+api.on(["GET", "HEAD"], "/api/public/shares/:token/download", async (c) => {
+  const now = Date.now();
+  const token = c.req.param("token");
+  const share = await resolvePublicShare(c.env.services, token, now);
+  if (!share || share.item.type !== "file" || !share.item.objectKey) {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+  }
+  if (
+    share.accessMode === "code"
+    && !(await hasShareCookie(c.req.raw, share.id, c.env.services.sharing.secret, now))
+  ) {
+    return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
+  }
+  const response = await fileDownloadResponse({
+    request: c.req.raw,
+    blobs: c.env.services.blobs,
+    objectKey: share.item.objectKey,
+    fileName: share.item.displayName || share.item.originalName || "download",
+    mimeType: share.item.mimeType,
+    attachmentOnly: true,
+  });
+  if (!response) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+  const startsDownload = !c.req.header("range");
+  if (c.req.method === "GET" && startsDownload && (response.status === 200 || response.status === 206)) {
+    await c.env.services.metadata.recordShareAccess(share.id, now, true);
+  }
+  response.headers.set("x-robots-tag", "noindex, nofollow, noarchive");
+  return response;
 });
 
 installIdentityMiddleware(api);
@@ -138,6 +289,74 @@ api.get("/api/storage", async (c) => {
     c.env.services.quotaBytes,
   );
   return c.json(result);
+});
+
+api.get("/api/shares", async (c) => {
+  const now = Date.now();
+  const shares = await c.env.services.metadata.listShares(
+    c.get("identity").ownerId,
+    now,
+    now - 30 * 24 * 60 * 60 * 1000,
+  );
+  const summaries = await Promise.all(shares.map(async (share) => {
+    const token = await tokenForShare(c.env.services.sharing.secret, share.id);
+    return shareSummary(share, now, c.env.services.sharing.publicUrl, token);
+  }));
+  return c.json({ shares: summaries });
+});
+
+api.post("/api/items/:id/share", async (c) => {
+  if (!c.env.services.sharing.enabled) {
+    return errorResponse(c.get("requestId"), "SHARING_DISABLED", "分享功能当前已关闭", 403);
+  }
+  const parsed = createShareSchema.safeParse(await parseJson(c.req.raw));
+  if (!parsed.success) {
+    return errorResponse(c.get("requestId"), "INVALID_SHARE", "分享设置无效", 400);
+  }
+  const ownerId = c.get("identity").ownerId;
+  const item = await c.env.services.metadata.getItem(ownerId, c.req.param("id"));
+  if (!item || item.deletedAt !== null || (item.type !== "text" && item.type !== "file")) {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "该内容不能分享", 404);
+  }
+  const id = crypto.randomUUID();
+  const token = await tokenForShare(c.env.services.sharing.secret, id);
+  const tokenHash = await keyedDigest(c.env.services.sharing.secret, "share-token-hash", token);
+  const generatedCode = parsed.data.accessMode === "code" && !parsed.data.code
+    ? randomShareCode()
+    : null;
+  const code = parsed.data.accessMode === "code" ? parsed.data.code || generatedCode : null;
+  const codeHash = code
+    ? await keyedDigest(c.env.services.sharing.secret, "share-code", `${id}:${code}`)
+    : null;
+  const now = Date.now();
+  const share = await c.env.services.metadata.createShare({
+    id,
+    ownerId,
+    itemId: item.id,
+    tokenHash,
+    accessMode: parsed.data.accessMode,
+    codeHash,
+    now,
+    expiresAt: now + parsed.data.expiresInSeconds * 1000,
+  });
+  if (!share) return errorResponse(c.get("requestId"), "NOT_FOUND", "该内容不能分享", 404);
+  const url = new URL(`/s/${token}`, c.env.services.sharing.publicUrl);
+  if (code) url.hash = `code=${code}`;
+  return c.json({
+    share: shareSummary(share, now, c.env.services.sharing.publicUrl, token),
+    shareUrl: url.toString(),
+    generatedCode,
+  }, 201);
+});
+
+api.delete("/api/shares/:id", async (c) => {
+  const share = await c.env.services.metadata.revokeShare(
+    c.get("identity").ownerId,
+    c.req.param("id"),
+    Date.now(),
+  );
+  if (!share) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在", 404);
+  return c.json({ revoked: true });
 });
 
 api.post("/api/uploads", async (c) => {
@@ -261,34 +480,53 @@ api.delete("/api/uploads/:id", async (c) => {
   return c.json({ cancelled: true });
 });
 
-api.get("/api/files/:id", async (c) => {
+api.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
   const item = await c.env.services.metadata.getItem(c.get("identity").ownerId, c.req.param("id"));
   if (!item || item.type !== "file" || !item.objectKey) {
     return errorResponse(c.get("requestId"), "NOT_FOUND", "文件不存在", 404);
   }
-  const object = await c.env.services.blobs.get(item.objectKey);
-  if (!object) return errorResponse(c.get("requestId"), "FILE_MISSING", "文件数据不可用", 404);
-  const inline = Boolean(item.mimeType?.startsWith("image/") && item.mimeType !== "image/svg+xml");
-  // 图片可内联预览，但 SVG 和其他文件始终下载，降低主动执行/嗅探内容的风险。
   const fileName = item.displayName || item.originalName || "download";
-  const headers = new Headers({
-    "content-type": inline ? object.contentType : "application/octet-stream",
-    "content-length": String(object.size),
-    "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(fileName)}`,
-    "x-content-type-options": "nosniff",
-    "cache-control": "private, no-store",
+  const response = await fileDownloadResponse({
+    request: c.req.raw,
+    blobs: c.env.services.blobs,
+    objectKey: item.objectKey,
+    fileName,
+    mimeType: item.mimeType,
+    attachmentOnly: false,
   });
-  if (object.etag) headers.set("etag", object.etag);
-  return new Response(object.body, { headers });
+  return response ?? errorResponse(c.get("requestId"), "FILE_MISSING", "文件数据不可用", 404);
 });
 
 api.get("/api/export", async (c) => {
-  const items = await c.env.services.metadata.listAllForExport(c.get("identity").ownerId);
+  const ownerId = c.get("identity").ownerId;
+  const now = Date.now();
+  const [items, storedShares] = await Promise.all([
+    c.env.services.metadata.listAllForExport(ownerId),
+    c.env.services.metadata.listShares(ownerId, now, now - 30 * 24 * 60 * 60 * 1000),
+  ]);
+  const shares = storedShares.map((share) => {
+    const summary = shareSummary(share, now, c.env.services.sharing.publicUrl);
+    return {
+      id: summary.id,
+      itemId: summary.itemId,
+      itemType: summary.itemType,
+      itemLabel: summary.itemLabel,
+      accessMode: summary.accessMode,
+      status: summary.status,
+      createdAt: summary.createdAt,
+      expiresAt: summary.expiresAt,
+      revokedAt: summary.revokedAt,
+      accessCount: summary.accessCount,
+      downloadCount: summary.downloadCount,
+      lastAccessedAt: summary.lastAccessedAt,
+    };
+  });
   const bundle: ExportBundle = {
     format: "drop-worker-export",
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     items,
+    shares,
   };
   return new Response(JSON.stringify(bundle, null, 2), {
     headers: {

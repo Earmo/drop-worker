@@ -1,5 +1,17 @@
 // 本地 SQLite 和 Cloudflare D1 共用这组幂等建表语句；正式生产迁移文件仍由 Drizzle 管理。
 export const schemaStatements = [
+  `CREATE TABLE IF NOT EXISTS schema_version (
+    id INTEGER PRIMARY KEY,
+    version INTEGER NOT NULL
+  )`,
+  `INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 3)`,
+  `UPDATE schema_version SET version = 3 WHERE id = 1 AND version < 3`,
+  `CREATE TABLE IF NOT EXISTS migration_state (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
   // items 保存文本、链接和已完成文件的统一元数据；deleted_at 为 NULL 表示活动内容。
   `CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
@@ -60,4 +72,31 @@ export const schemaStatements = [
     expires_at INTEGER NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_auth_challenges_expires ON auth_challenges(expires_at)`,
+  `CREATE TABLE IF NOT EXISTS shares (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    access_mode TEXT NOT NULL CHECK (access_mode IN ('public', 'code')),
+    code_hash TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    download_count INTEGER NOT NULL DEFAULT 0,
+    last_accessed_at INTEGER
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_token_hash ON shares(token_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_shares_item_status ON shares(item_id, revoked_at, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_shares_retention ON shares(expires_at, revoked_at)`,
+  `CREATE TABLE IF NOT EXISTS share_attempts (
+    share_id TEXT NOT NULL,
+    source_hash TEXT NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    locked_until INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (share_id, source_hash)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_share_attempts_updated ON share_attempts(updated_at)`,
 ] as const;

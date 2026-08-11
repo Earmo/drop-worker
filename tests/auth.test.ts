@@ -3,12 +3,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { openLocalMetadataStore } from "../apps/api/stores/local";
+import { validatePublicUrl } from "../apps/api/sharing";
 import { createPasswordHash, LocalAuth } from "../server/local-auth";
 import { CloudflareEmailAuth } from "../worker/email-auth";
+import { createCloudflareServices } from "../worker/services";
 
 test("本地密码登录创建 30 天会话并支持退出", async () => {
   const root = await mkdtemp(join(tmpdir(), "drop-worker-auth-"));
-  const auth = new LocalAuth(join(root, "auth.sqlite"), {
+  const metadata = openLocalMetadataStore(join(root, "auth.sqlite"));
+  await metadata.store.ensureSchema();
+  const auth = new LocalAuth(metadata.store, {
     mode: "password",
     email: "owner@example.com",
     passwordHash: createPasswordHash("correct horse battery staple"),
@@ -50,6 +55,7 @@ test("本地密码登录创建 30 天会话并支持退出", async () => {
     assert.match(logout?.headers.get("set-cookie") || "", /Max-Age=0/);
   } finally {
     auth.close();
+    metadata.close();
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -71,4 +77,51 @@ test("Cloudflare SMTP 接受 994 端口的隐式 TLS 配置", () => {
   } as unknown as Env;
 
   assert.doesNotThrow(() => new CloudflareEmailAuth(env));
+});
+
+test("公开地址只接受站点根地址且默认要求安全传输", () => {
+  assert.equal(validatePublicUrl("http://localhost:3000").origin, "http://localhost:3000");
+  assert.equal(validatePublicUrl("https://drop.example.com").origin, "https://drop.example.com");
+  assert.equal(
+    validatePublicUrl("http://drop.internal:3000", true).origin,
+    "http://drop.internal:3000",
+  );
+  assert.throws(() => validatePublicUrl("http://drop.example.com"), /必须使用 HTTPS/);
+  assert.throws(() => validatePublicUrl("ftp://drop.example.com"), /HTTP 或 HTTPS/);
+  assert.throws(() => validatePublicUrl("https://drop.example.com/base"), /站点根地址/);
+  assert.throws(() => validatePublicUrl("https://user:secret@drop.example.com"), /站点根地址/);
+});
+
+test("公开 Sites 仍只把配置邮箱识别为工作区所有者", async () => {
+  const baseEnv = {
+    AUTH_MODE: "platform",
+    AUTH_SESSION_SECRET: "a-secure-session-secret-that-is-long-enough",
+    PUBLIC_URL: "https://drop.example.com",
+    SHARING_ENABLED: "true",
+    DB: {},
+    FILES: {},
+  };
+  assert.throws(
+    () => createCloudflareServices(baseEnv as unknown as Env),
+    /必须配置 OWNER_EMAIL/,
+  );
+
+  const services = createCloudflareServices({
+    ...baseEnv,
+    OWNER_EMAIL: "owner@example.com",
+  } as unknown as Env);
+  const owner = await services.resolveIdentity(new Request("https://drop.example.com/api/items", {
+    headers: {
+      "oai-authenticated-user-id": "owner-id",
+      "oai-authenticated-user-email": "Owner@Example.com",
+    },
+  }));
+  assert.equal(owner?.ownerId, "sites:owner-id");
+  const visitor = await services.resolveIdentity(new Request("https://drop.example.com/api/items", {
+    headers: {
+      "oai-authenticated-user-id": "visitor-id",
+      "oai-authenticated-user-email": "visitor@example.com",
+    },
+  }));
+  assert.equal(visitor, null);
 });

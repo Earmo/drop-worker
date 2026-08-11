@@ -5,11 +5,16 @@ import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { Hono } from "hono";
 import { handleApiRequest } from "../apps/api/create-api";
 import { runCleanup } from "../apps/api/cleanup";
-import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
+import { LocalBlobStore } from "../apps/api/stores/local";
+import { openRelationalMetadataStore } from "../apps/api/stores/relational";
+import { createS3BlobStoreFromEnv, S3BlobStore } from "../apps/api/stores/s3";
+import type { BlobStore } from "../apps/api/platform";
 import { addLocalAuthToServices, LocalAuth, localAuthConfigFromEnv } from "./local-auth";
+import { createClientAddressResolver, PEER_ADDRESS_HEADER } from "./client-address";
 
 const root = process.cwd();
 // 本地实例把数据库、对象和未完成上传统一放在 DATA_DIR，便于 Docker 卷或手工备份整体迁移。
@@ -24,18 +29,30 @@ await access(serverEntry).catch(() => {
 await mkdir(dataRoot, { recursive: true });
 
 // 启动顺序：打开数据库并建表 -> 准备对象目录 -> 校验认证配置 -> 组装运行时服务。
-const metadata = openLocalMetadataStore(databasePath);
+const metadata = await openRelationalMetadataStore(databasePath);
 await metadata.store.ensureSchema();
-const blobs = new LocalBlobStore(dataRoot);
-await blobs.prepare();
+await metadata.store.ensureApplicationReady();
+const blobDriver = (process.env.BLOB_DRIVER || "local").trim().toLocaleLowerCase();
+let blobs: BlobStore;
+if (blobDriver === "local") blobs = new LocalBlobStore(dataRoot);
+else if (blobDriver === "s3") blobs = createS3BlobStoreFromEnv();
+else throw new Error("BLOB_DRIVER 必须是 local 或 s3");
+await blobs.healthCheck();
 const authConfig = localAuthConfigFromEnv();
-const auth = new LocalAuth(databasePath, authConfig);
+const auth = new LocalAuth(metadata.store, authConfig);
+const resolveClientAddress = createClientAddressResolver(process.env.TRUST_PROXY);
 const quotaBytes = Number(process.env.MAX_STORAGE_BYTES || 10 * 1024 * 1024 * 1024);
 const services = addLocalAuthToServices(
   {
     metadata: metadata.store,
     blobs,
     quotaBytes: Number.isFinite(quotaBytes) && quotaBytes > 0 ? quotaBytes : 10 * 1024 * 1024 * 1024,
+    sharing: {
+      enabled: process.env.SHARING_ENABLED !== "false",
+      publicUrl: authConfig.publicUrl,
+      secret: authConfig.sessionSecret,
+      resolveClientAddress,
+    },
   },
   auth,
   authConfig,
@@ -87,7 +104,13 @@ async function fetchAsset(request: Request): Promise<Response> {
 }
 
 const app = new Hono();
-app.all("/api/*", (c) => handleApiRequest(c.req.raw, services));
+const handleRuntimeRequest = (c: Parameters<typeof getConnInfo>[0]) => {
+  const headers = new Headers(c.req.raw.headers);
+  headers.set(PEER_ADDRESS_HEADER, getConnInfo(c).remote.address || "unknown");
+  return handleApiRequest(new Request(c.req.raw, { headers }), services);
+};
+app.all("/api/*", handleRuntimeRequest);
+app.all("/health/*", handleRuntimeRequest);
 app.all("*", async (c) => {
   // 静态资源命中时直接返回；未命中再交给 Vinext SSR，使页面路由和 API 仍由构建产物处理。
   const response = await fetchAsset(c.req.raw);
@@ -122,8 +145,8 @@ function shutdown(): void {
   clearInterval(cleanupTimer);
   server.close(() => {
     auth.close();
-    metadata.close();
-    process.exit(0);
+    if (blobs instanceof S3BlobStore) blobs.close();
+    void metadata.close().finally(() => process.exit(0));
   });
 }
 

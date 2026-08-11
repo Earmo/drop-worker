@@ -926,6 +926,18 @@ textarea:focus-visible,
   color: #ca8915;
 }
 
+.item-actions button.active-share,
+.share-active-tag {
+  color: var(--green);
+}
+
+.share-active-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 650;
+}
+
 .item-actions button.danger:hover,
 .bulk-actions .danger {
   color: var(--danger);
@@ -1308,6 +1320,564 @@ textarea:focus-visible,
   animation: spin 0.8s linear infinite;
 }
 
+.share-manager {
+  min-width: 0;
+}
+
+.share-manager-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 2px 22px;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.share-manager-heading p,
+.share-dialog header p {
+  margin: 0 0 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.share-manager-heading h2,
+.share-dialog header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.share-manager-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.share-list {
+  display: grid;
+}
+
+.share-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 88px;
+  padding: 14px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.share-row.status-expired,
+.share-row.status-revoked {
+  opacity: 0.68;
+}
+
+.share-row-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.share-row-main {
+  min-width: 0;
+}
+
+.share-row-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-row-title strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-row-title span {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.share-row.status-active .share-row-title span {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.share-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.share-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.share-row-actions button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.share-row-actions button:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.share-row-actions button.danger:hover {
+  color: var(--danger);
+}
+
+.share-once-note {
+  max-width: 126px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.share-empty {
+  margin-top: 34px;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  padding: 18px;
+  place-items: center;
+  background: color-mix(in srgb, #080b09 52%, transparent);
+  backdrop-filter: blur(6px);
+  animation: dialog-fade 150ms ease both;
+}
+
+.share-dialog {
+  width: min(520px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.24);
+  animation: dialog-rise 180ms ease both;
+}
+
+.share-dialog > header {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 18px 14px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.share-dialog > header > div {
+  min-width: 0;
+}
+
+.share-dialog header h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-dialog-body,
+.share-created {
+  display: grid;
+  gap: 20px;
+  padding: 22px;
+}
+
+.share-dialog fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.share-dialog legend,
+.share-code-field,
+.share-expiry-field {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.share-mode-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px;
+  border-radius: 7px;
+  background: var(--surface-muted);
+}
+
+.share-mode-control button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.share-mode-control button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.08);
+}
+
+.share-code-field,
+.share-expiry-field {
+  display: grid;
+  gap: 8px;
+}
+
+.share-code-field input,
+.share-expiry-field select,
+.share-url-field input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.share-code-field input {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 16px;
+}
+
+.share-replace-warning {
+  padding: 10px 11px;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.share-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.share-dialog-actions button,
+.dialog-done {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.share-dialog-actions .share-create-button,
+.dialog-done {
+  border-color: var(--surface-strong);
+  background: var(--surface-strong);
+  color: var(--surface);
+}
+
+.share-created {
+  justify-items: start;
+}
+
+.share-created-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.share-created h3,
+.share-created p {
+  margin: 0;
+}
+
+.share-created h3 {
+  font-size: 18px;
+}
+
+.share-created p {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.share-url-field {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.share-url-field button {
+  display: inline-flex;
+  min-width: 84px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--green);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.public-share-shell {
+  min-height: 100svh;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--green-soft) 42%, transparent) 1px, transparent 1px) 0 0 / 46px 46px,
+    var(--bg);
+}
+
+.public-share-header {
+  display: flex;
+  min-height: 78px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px clamp(20px, 5vw, 64px);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(16px);
+}
+
+.public-share-header .brand-lockup {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.share-security {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.public-share-stage {
+  display: grid;
+  width: min(820px, calc(100% - 40px));
+  min-height: calc(100svh - 78px);
+  margin: 0 auto;
+  padding: clamp(48px, 10vh, 110px) 0 64px;
+  place-items: start center;
+}
+
+.share-loading,
+.share-verify,
+.share-missing,
+.shared-file-view,
+.shared-text-view {
+  width: min(100%, 620px);
+  animation: share-rise 220ms ease both;
+}
+
+.share-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.share-verify,
+.share-missing,
+.shared-file-view {
+  display: grid;
+  justify-items: start;
+}
+
+.share-stage-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 28px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.share-kicker {
+  margin: 0 0 9px;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.share-verify h1,
+.share-missing h1,
+.shared-file-view h1,
+.shared-content-heading h1 {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: clamp(26px, 5vw, 42px);
+  line-height: 1.12;
+}
+
+.share-verify > p:not(.share-kicker),
+.share-missing > p:not(.share-kicker),
+.shared-file-view > p:not(.share-kicker) {
+  margin: 14px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.share-verify input {
+  width: min(100%, 260px);
+  height: 64px;
+  margin-top: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 30px;
+  text-align: center;
+}
+
+.share-verify input:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.share-error {
+  margin-top: 10px;
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.share-primary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.share-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.shared-content-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.shared-text-view pre {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0;
+  padding: 24px 0;
+  border-block: 1px solid var(--line-strong);
+  color: var(--text);
+  font-family: var(--font-geist-sans), sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.shared-text-view footer,
+.shared-file-view footer {
+  margin-top: 18px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.shared-file-view footer {
+  margin-top: 24px;
+}
+
+@keyframes dialog-fade {
+  from { opacity: 0; }
+}
+
+@keyframes dialog-rise {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+}
+
+@keyframes share-rise {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
@@ -1519,7 +2089,7 @@ textarea:focus-visible,
     left: 10px;
     z-index: 16;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     min-height: 60px;
     padding: 5px;
     border: 1px solid var(--line-strong);
@@ -1527,6 +2097,58 @@ textarea:focus-visible,
     background: color-mix(in srgb, var(--surface) 92%, transparent);
     box-shadow: var(--shadow);
     backdrop-filter: blur(18px);
+  }
+
+  .share-manager-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .share-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .share-row-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .share-row-actions {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+
+  .share-once-note {
+    max-width: none;
+    text-align: left;
+  }
+
+  .public-share-header {
+    min-height: 68px;
+    padding: 12px 16px;
+  }
+
+  .share-security {
+    font-size: 10px;
+  }
+
+  .public-share-stage {
+    width: calc(100% - 32px);
+    min-height: calc(100svh - 68px);
+    padding-top: 46px;
+  }
+
+  .share-verify h1,
+  .share-missing h1,
+  .shared-file-view h1,
+  .shared-content-heading h1 {
+    font-size: 29px;
+  }
+
+  .share-url-field {
+    grid-template-columns: 1fr;
   }
 
   .mobile-nav button {
