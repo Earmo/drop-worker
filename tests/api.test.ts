@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { runCleanup } from "../apps/api/cleanup";
 import { handleApiRequest } from "../apps/api/create-api";
 import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
 import type { RuntimeServices } from "../apps/api/platform";
 import { SqlMetadataStore, type SqlExecutor } from "../apps/api/stores/sql-metadata";
-import { keyedDigest, tokenForShare } from "../apps/api/sharing";
+import { decryptShareCode, encryptShareCode, keyedDigest, tokenForShare } from "../apps/api/sharing";
 import { createShareSchema } from "../packages/contracts";
 import type {
   CreateShareResponse,
@@ -81,9 +82,61 @@ test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
   const newerSchema = new SqlMetadataStore({
     ...sql,
     tableExists: async () => true,
-    first: async <T>() => ({ version: 4 }) as T,
+    first: async <T>() => ({ version: 5 }) as T,
   }, false);
   await assert.rejects(newerSchema.ensureSchema(), /数据库架构尚未迁移/);
+});
+
+test("分享口令密文只可由同一部署和分享记录解密", async () => {
+  const encrypted = await encryptShareCode("test-share-secret-that-is-long-enough", "share-a", "0042");
+  assert.notEqual(encrypted, "0042");
+  assert.equal(
+    await decryptShareCode("test-share-secret-that-is-long-enough", "share-a", encrypted),
+    "0042",
+  );
+  assert.equal(await decryptShareCode("different-share-secret-that-is-long-enough", "share-a", encrypted), null);
+  assert.equal(await decryptShareCode("test-share-secret-that-is-long-enough", "share-b", encrypted), null);
+  assert.equal(await decryptShareCode("test-share-secret-that-is-long-enough", "share-a", "invalid"), null);
+});
+
+test("本地 SQLite 会从架构 v3 升级并保留历史分享", async () => {
+  const root = await mkdtemp(join(tmpdir(), "drop-worker-schema-upgrade-"));
+  const databasePath = join(root, "db.sqlite");
+  const initial = openLocalMetadataStore(databasePath);
+  await initial.store.ensureSchema();
+  const item = await initial.store.createItem({ ownerId: "upgrade-owner", type: "text", content: "历史分享" });
+  await initial.store.createShare({
+    id: crypto.randomUUID(),
+    ownerId: "upgrade-owner",
+    itemId: item.id,
+    tokenHash: "t".repeat(43),
+    accessMode: "code",
+    codeHash: "h".repeat(43),
+    now: Date.now(),
+    expiresAt: Date.now() + 86_400_000,
+  });
+  initial.close();
+
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec("ALTER TABLE shares DROP COLUMN code_encrypted");
+  legacy.exec("UPDATE schema_version SET version = 3 WHERE id = 1");
+  legacy.close();
+
+  const upgraded = openLocalMetadataStore(databasePath);
+  try {
+    await upgraded.store.ensureSchema();
+    const shares = await upgraded.store.listPortableShares();
+    assert.equal(shares.length, 1);
+    assert.equal(shares[0]?.codeHash, "h".repeat(43));
+    assert.equal(shares[0]?.codeEncrypted, null);
+  } finally {
+    upgraded.close();
+  }
+  const verified = new DatabaseSync(databasePath);
+  assert.equal((verified.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version, 4);
+  assert.ok(verified.prepare("SELECT name FROM pragma_table_info('shares') WHERE name = 'code_encrypted'").get());
+  verified.close();
+  await rm(root, { recursive: true, force: true });
 });
 
 test("就绪检查会探测数据库且不泄露失败细节", async () => {
@@ -414,8 +467,15 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
     const token = sharedUrl.pathname.split("/").at(-1)!;
     assert.equal(sharedUrl.hash, "#code=0042");
     assert.equal(created.share.shareUrl, new URL(`/s/${token}`, current.services.sharing.publicUrl).toString());
+    assert.equal(created.share.code, "0042");
     const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
     assert.equal(listed.shares[0]?.shareUrl, new URL(`/s/${token}`, current.services.sharing.publicUrl).toString());
+    assert.equal(listed.shares[0]?.code, "0042");
+    const stored = await current.services.metadata.getShareByTokenHash(
+      await keyedDigest(current.services.sharing.secret, "share-token-hash", token),
+    );
+    assert.ok(stored?.codeEncrypted);
+    assert.notEqual(stored.codeEncrypted, "0042");
 
     const protectedContent = await request(current.services, `/api/public/shares/${token}`);
     assert.equal(protectedContent.status, 401);
@@ -532,6 +592,7 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
     assert.deepEqual(statuses.sort(), [200, 404]);
     const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
     assert.equal(listed.shares.filter((share) => share.status === "active").length, 1);
+    assert.equal(listed.shares.find((share) => share.status === "active")?.code, null);
 
     const expiredId = crypto.randomUUID();
     const expiredToken = await tokenForShare(current.services.sharing.secret, expiredId);
@@ -609,7 +670,7 @@ test("全局开关立即暂停分享且导出不包含访问秘密", async () =>
     const exported = await (await request(current.services, "/api/export")).text();
     assert.match(exported, /"version": 2/);
     assert.match(exported, /"accessMode": "code"/);
-    assert.doesNotMatch(exported, /tokenHash|codeHash|sourceHash|drop_share_access|#code=|0042/);
+    assert.doesNotMatch(exported, /tokenHash|codeHash|codeEncrypted|sourceHash|drop_share_access|#code=|0042/);
   } finally {
     await current.close();
   }

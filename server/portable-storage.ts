@@ -26,6 +26,7 @@ const portableItemSchema = z.object({
 const portableShareSchema = z.object({
   id: z.string().uuid(), ownerId: z.string().min(1), itemId: z.string().uuid(),
   tokenHash: z.string().min(32), accessMode: z.enum(["public", "code"]), codeHash: z.string().nullable(),
+  codeEncrypted: z.string().nullable().default(null),
   createdAt: z.number().int(), expiresAt: z.number().int(), revokedAt: z.number().int().nullable(),
   accessCount: z.number().int().nonnegative(), downloadCount: z.number().int().nonnegative(),
   lastAccessedAt: z.number().int().nullable(),
@@ -36,7 +37,7 @@ const portableManifestSchema = z.object({
   version: z.literal(2),
   migrationId: z.string().uuid(),
   createdAt: z.string(),
-  schemaVersion: z.literal(3),
+  schemaVersion: z.union([z.literal(3), z.literal(4)]),
   secretFingerprint: z.string().length(64),
   items: z.array(portableItemSchema),
   shares: z.array(portableShareSchema),
@@ -257,7 +258,7 @@ export async function createPortableBackup(
       version: 2,
       migrationId: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
-      schemaVersion: 3,
+      schemaVersion: 4,
       secretFingerprint: secretFingerprint(secretValue(prefix)),
       items,
       shares: shares.map((share) => ({
@@ -267,6 +268,7 @@ export async function createPortableBackup(
         tokenHash: share.tokenHash,
         accessMode: share.accessMode,
         codeHash: share.codeHash,
+        codeEncrypted: share.codeEncrypted,
         createdAt: share.createdAt,
         expiresAt: share.expiresAt,
         revokedAt: share.revokedAt,

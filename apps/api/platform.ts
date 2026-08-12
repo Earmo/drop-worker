@@ -35,6 +35,7 @@ export type StoredShare = {
   tokenHash: string;
   accessMode: ShareAccessMode;
   codeHash: string | null;
+  codeEncrypted: string | null;
   createdAt: number;
   expiresAt: number;
   revokedAt: number | null;
@@ -135,6 +136,7 @@ export interface MetadataStore {
     tokenHash: string;
     accessMode: ShareAccessMode;
     codeHash: string | null;
+    codeEncrypted?: string | null;
     now: number;
     expiresAt: number;
   }): Promise<StoredShare | null>;

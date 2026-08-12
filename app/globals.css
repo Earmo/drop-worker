@@ -1544,6 +1544,33 @@ textarea:focus-visible,
   text-align: right;
 }
 
+.share-code-value {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 3px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.share-code-value span {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.share-code-value strong {
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.share-code-value button {
+  width: 28px;
+  height: 28px;
+}
+
 .share-empty {
   margin-top: 34px;
 }
@@ -2217,7 +2244,7 @@ textarea:focus-visible,
 
   .share-row-actions {
     grid-column: 2;
-    justify-content: flex-start;
+    justify-content: space-between;
   }
 
   .share-once-note {

@@ -163,6 +163,7 @@ export const shareSummarySchema = z.object({
   downloadCount: z.number().int().nonnegative(),
   lastAccessedAt: z.number().int().nullable(),
   shareUrl: z.string().url().nullable(),
+  code: z.string().regex(/^\d{4}$/).nullable(),
 });
 export type ShareSummary = z.infer<typeof shareSummarySchema>;
 
@@ -217,5 +218,5 @@ export type ExportBundle = {
   version: 1 | 2;
   exportedAt: string;
   items: DropItem[];
-  shares?: Array<Omit<ShareSummary, "shareUrl">>;
+  shares?: Array<Omit<ShareSummary, "shareUrl" | "code">>;
 };

@@ -49,6 +49,7 @@ export const shares = mysqlTable("shares", {
   id: varchar("id", { length: 64 }).primaryKey(), ownerId: varchar("owner_id", { length: 255 }).notNull(),
   itemId: varchar("item_id", { length: 64 }).notNull(), tokenHash: varchar("token_hash", { length: 128 }).notNull(),
   accessMode: varchar("access_mode", { length: 16 }).notNull(), codeHash: varchar("code_hash", { length: 128 }),
+  codeEncrypted: text("code_encrypted"),
   createdAt: epoch("created_at").notNull(), expiresAt: epoch("expires_at").notNull(), revokedAt: epoch("revoked_at"),
   accessCount: int("access_count").notNull().default(0), downloadCount: int("download_count").notNull().default(0),
   lastAccessedAt: epoch("last_accessed_at"),

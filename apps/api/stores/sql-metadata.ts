@@ -65,6 +65,7 @@ type ShareJoinedRow = {
   token_hash: string;
   access_mode: "public" | "code";
   code_hash: string | null;
+  code_encrypted: string | null;
   share_created_at: number;
   expires_at: number;
   revoked_at: number | null;
@@ -93,7 +94,7 @@ const UPLOAD_COLUMNS = `id, owner_id, object_key, provider_upload_id, file_name,
   updated_at, expires_at`;
 const SHARE_JOIN_COLUMNS = `
   s.id AS share_id, s.owner_id AS share_owner_id, s.item_id AS share_item_id,
-  s.token_hash, s.access_mode, s.code_hash, s.created_at AS share_created_at,
+  s.token_hash, s.access_mode, s.code_hash, s.code_encrypted, s.created_at AS share_created_at,
   s.expires_at, s.revoked_at, s.access_count, s.download_count, s.last_accessed_at,
   i.type AS item_type, i.content AS item_content, i.title AS item_title,
   i.object_key AS item_object_key, i.original_name AS item_original_name,
@@ -173,6 +174,7 @@ function shareFromRow(row: ShareJoinedRow): StoredShare {
     tokenHash: row.token_hash,
     accessMode: row.access_mode,
     codeHash: row.code_hash,
+    codeEncrypted: row.code_encrypted,
     createdAt: row.share_created_at,
     expiresAt: row.expires_at,
     revokedAt: row.revoked_at,
@@ -228,6 +230,12 @@ export class SqlMetadataStore implements MetadataStore {
     if (this.autoCreateSchema) {
       // 本地零配置模式每次执行幂等语句，使已有 SQLite 实例也能补齐新增表。
       await this.sql.batch(schemaStatements.map((sql) => ({ sql })));
+      try {
+        await this.sql.run("ALTER TABLE shares ADD COLUMN code_encrypted TEXT");
+      } catch (error) {
+        if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
+      }
+      await this.sql.run("UPDATE schema_version SET version = 4 WHERE id = 1 AND version < 4");
       this.schemaReady = true;
       return;
     }
@@ -239,7 +247,7 @@ export class SqlMetadataStore implements MetadataStore {
     const schemaVersion = versionTableExists
       ? await this.sql.first<{ version: number }>("SELECT version FROM schema_version WHERE id = 1")
       : null;
-    if (!itemsExist || !sharesExist || !schemaVersion || schemaVersion.version !== 3) {
+    if (!itemsExist || !sharesExist || !schemaVersion || schemaVersion.version !== 4) {
       throw new Error("数据库架构尚未迁移，请先应用正式迁移");
     }
     this.schemaReady = true;
@@ -704,6 +712,7 @@ export class SqlMetadataStore implements MetadataStore {
     tokenHash: string;
     accessMode: "public" | "code";
     codeHash: string | null;
+    codeEncrypted?: string | null;
     now: number;
     expiresAt: number;
   }): Promise<StoredShare | null> {
@@ -720,6 +729,7 @@ export class SqlMetadataStore implements MetadataStore {
     tokenHash: string;
     accessMode: "public" | "code";
     codeHash: string | null;
+    codeEncrypted?: string | null;
     now: number;
     expiresAt: number;
   }): Promise<StoredShare | null> {
@@ -731,9 +741,9 @@ export class SqlMetadataStore implements MetadataStore {
       },
       {
         sql: `INSERT INTO shares (
-          id, owner_id, item_id, token_hash, access_mode, code_hash,
+          id, owner_id, item_id, token_hash, access_mode, code_hash, code_encrypted,
           created_at, expires_at, revoked_at, access_count, download_count
-        ) SELECT ?, ?, id, ?, ?, ?, ?, ?, NULL, 0, 0
+        ) SELECT ?, ?, id, ?, ?, ?, ?, ?, ?, NULL, 0, 0
           FROM items
           WHERE id = ? AND owner_id = ? AND deleted_at IS NULL AND type IN ('text', 'file')`,
         params: [
@@ -742,6 +752,7 @@ export class SqlMetadataStore implements MetadataStore {
           input.tokenHash,
           input.accessMode,
           input.codeHash,
+          input.codeEncrypted ?? null,
           input.now,
           input.expiresAt,
           input.itemId,
@@ -1016,12 +1027,12 @@ export class SqlMetadataStore implements MetadataStore {
   async importPortableShare(share: Omit<StoredShare, "item">): Promise<void> {
     await this.sql.run(
       `INSERT OR IGNORE INTO shares (
-        id, owner_id, item_id, token_hash, access_mode, code_hash,
+        id, owner_id, item_id, token_hash, access_mode, code_hash, code_encrypted,
         created_at, expires_at, revoked_at, access_count, download_count, last_accessed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         share.id, share.ownerId, share.itemId, share.tokenHash, share.accessMode,
-        share.codeHash, share.createdAt, share.expiresAt, share.revokedAt,
+        share.codeHash, share.codeEncrypted, share.createdAt, share.expiresAt, share.revokedAt,
         share.accessCount, share.downloadCount, share.lastAccessedAt,
       ],
     );

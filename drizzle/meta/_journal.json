@@ -29,6 +29,13 @@
       "when": 1786422877711,
       "tag": "0003_outgoing_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1786530421063,
+      "tag": "0004_visible-share-code",
+      "breakpoints": true
     }
   ]
 }

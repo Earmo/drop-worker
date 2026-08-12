@@ -79,6 +79,7 @@ export const schemaStatements = [
     token_hash TEXT NOT NULL UNIQUE,
     access_mode TEXT NOT NULL CHECK (access_mode IN ('public', 'code')),
     code_hash TEXT,
+    code_encrypted TEXT,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     revoked_at INTEGER,

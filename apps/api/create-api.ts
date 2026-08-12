@@ -22,6 +22,8 @@ import type { RuntimeServices } from "./platform";
 import { fileDownloadResponse, isPreviewableImage } from "./download";
 import {
   createShareCookie,
+  decryptShareCode,
+  encryptShareCode,
   hasShareCookie,
   keyedDigest,
   randomShareCode,
@@ -326,7 +328,8 @@ api.get("/api/shares", async (c) => {
   );
   const summaries = await Promise.all(shares.map(async (share) => {
     const token = await tokenForShare(c.env.services.sharing.secret, share.id);
-    return shareSummary(share, now, c.env.services.sharing.publicUrl, token);
+    const code = await decryptShareCode(c.env.services.sharing.secret, share.id, share.codeEncrypted);
+    return shareSummary(share, now, c.env.services.sharing.publicUrl, token, code);
   }));
   return c.json({ shares: summaries });
 });
@@ -354,6 +357,9 @@ api.post("/api/items/:id/share", async (c) => {
   const codeHash = code
     ? await keyedDigest(c.env.services.sharing.secret, "share-code", `${id}:${code}`)
     : null;
+  const codeEncrypted = code
+    ? await encryptShareCode(c.env.services.sharing.secret, id, code)
+    : null;
   const now = Date.now();
   const share = await c.env.services.metadata.createShare({
     id,
@@ -362,6 +368,7 @@ api.post("/api/items/:id/share", async (c) => {
     tokenHash,
     accessMode: parsed.data.accessMode,
     codeHash,
+    codeEncrypted,
     now,
     expiresAt: now + parsed.data.expiresInSeconds * 1000,
   });
@@ -369,7 +376,7 @@ api.post("/api/items/:id/share", async (c) => {
   const url = new URL(`/s/${token}`, c.env.services.sharing.publicUrl);
   if (code) url.hash = `code=${code}`;
   return c.json({
-    share: shareSummary(share, now, c.env.services.sharing.publicUrl, token),
+    share: shareSummary(share, now, c.env.services.sharing.publicUrl, token, code),
     shareUrl: url.toString(),
     generatedCode,
   }, 201);

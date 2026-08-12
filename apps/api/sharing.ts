@@ -51,6 +51,40 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
   );
 }
 
+async function encryptionKey(secret: string): Promise<CryptoKey> {
+  const material = await crypto.subtle.digest("SHA-256", encoder.encode(`share-code-encryption:${secret}`));
+  return crypto.subtle.importKey("raw", material, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+export async function encryptShareCode(secret: string, shareId: string, code: string): Promise<string> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: encoder.encode(shareId) },
+    await encryptionKey(secret),
+    encoder.encode(code),
+  );
+  return `v1.${bytesToBase64Url(nonce)}.${bytesToBase64Url(new Uint8Array(ciphertext))}`;
+}
+
+export async function decryptShareCode(secret: string, shareId: string, encrypted: string | null): Promise<string | null> {
+  if (!encrypted) return null;
+  const [version, nonceValue, ciphertextValue] = encrypted.split(".");
+  const nonce = nonceValue ? base64UrlToBytes(nonceValue) : null;
+  const ciphertext = ciphertextValue ? base64UrlToBytes(ciphertextValue) : null;
+  if (version !== "v1" || !nonce || nonce.length !== 12 || !ciphertext) return null;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: encoder.encode(shareId) },
+      await encryptionKey(secret),
+      ciphertext,
+    );
+    const code = new TextDecoder().decode(plaintext);
+    return /^\d{4}$/.test(code) ? code : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function keyedDigest(secret: string, purpose: string, value: string): Promise<string> {
   const signature = await crypto.subtle.sign(
     "HMAC",
@@ -110,6 +144,7 @@ export function shareSummary(
   now: number,
   publicUrl: URL,
   token?: string,
+  code?: string | null,
 ): ShareSummary {
   const status = shareStatus(share, now);
   const shareUrl = status === "active" && token
@@ -129,6 +164,7 @@ export function shareSummary(
     downloadCount: share.downloadCount,
     lastAccessedAt: share.lastAccessedAt,
     shareUrl,
+    code: share.accessMode === "code" && status === "active" ? code ?? null : null,
   };
 }
 

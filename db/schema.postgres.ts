@@ -71,6 +71,7 @@ export const shares = pgTable("shares", {
   tokenHash: varchar("token_hash", { length: 128 }).notNull(),
   accessMode: varchar("access_mode", { length: 16 }).notNull(),
   codeHash: varchar("code_hash", { length: 128 }),
+  codeEncrypted: text("code_encrypted"),
   createdAt: epoch("created_at").notNull(),
   expiresAt: epoch("expires_at").notNull(),
   revokedAt: epoch("revoked_at"),

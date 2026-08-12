@@ -91,6 +91,7 @@ export const shares = sqliteTable(
     tokenHash: text("token_hash").notNull(),
     accessMode: text("access_mode", { enum: ["public", "code"] }).notNull(),
     codeHash: text("code_hash"),
+    codeEncrypted: text("code_encrypted"),
     createdAt: integer("created_at").notNull(),
     expiresAt: integer("expires_at").notNull(),
     revokedAt: integer("revoked_at"),

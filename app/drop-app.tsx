@@ -545,7 +545,7 @@ export function DropApp() {
           {view === "shares" && (
             <ShareManager
               shares={shares}
-              onCopy={(url) => void navigator.clipboard.writeText(url).then(() => showNotice("分享链接已复制"))}
+              onCopy={(value, kind) => void navigator.clipboard.writeText(value).then(() => showNotice(`分享${kind}已复制`))}
               onRevoke={async (share) => {
                 if (!window.confirm(`撤销“${share.itemLabel}”的分享？旧链接将立即失效。`)) return;
                 await api(`/api/shares/${share.id}`, { method: "DELETE" });
@@ -913,7 +913,7 @@ function ShareManager({
   onRevoke,
 }: {
   shares: ShareSummary[];
-  onCopy(url: string): void;
+  onCopy(value: string, kind: "链接" | "口令"): void;
   onRevoke(share: ShareSummary): Promise<void>;
 }) {
   const activeCount = shares.filter((share) => share.status === "active").length;
@@ -945,13 +945,18 @@ function ShareManager({
                 {share.status === "active" && share.shareUrl && (
                   <div className="share-row-url">
                     <input readOnly value={share.shareUrl} aria-label={`${share.itemLabel}分享链接`} />
-                    <button onClick={() => onCopy(share.shareUrl!)} title="复制分享链接" aria-label="复制分享链接"><Copy size={15} /></button>
+                    <button onClick={() => onCopy(share.shareUrl!, "链接")} title="复制分享链接" aria-label="复制分享链接"><Copy size={15} /></button>
                   </div>
                 )}
               </div>
               <div className="share-row-actions">
                 {share.status === "active" && share.accessMode === "code" && (
-                  <span className="share-once-note">口令需另行输入</span>
+                  share.code ? (
+                    <div className="share-code-value" aria-label={`访问口令 ${share.code}`}>
+                      <span>口令</span><strong>{share.code}</strong>
+                      <button onClick={() => onCopy(share.code!, "口令")} title="复制访问口令" aria-label="复制访问口令"><Copy size={14} /></button>
+                    </div>
+                  ) : <span className="share-once-note">历史口令不可恢复</span>
                 )}
                 {share.status === "active" && (
                   <button className="danger" onClick={() => void onRevoke(share)} title="撤销分享" aria-label="撤销分享"><X size={16} /></button>
@@ -1018,7 +1023,7 @@ function ShareDialog({
         {result ? (
           <div className="share-created">
             <span className="share-created-icon"><Check size={22} /></span>
-            <div><h3>分享已创建</h3><p>{result.share.accessMode === "code" ? "完整链接包含预填口令，只会显示这一次。" : "链接在到期或撤销前可访问。"}</p></div>
+            <div><h3>分享已创建</h3><p>{result.share.accessMode === "code" ? "完整链接包含预填口令，分享标签页也会持续显示口令。" : "链接在到期或撤销前可访问。"}</p></div>
             <div className="share-url-field"><input readOnly value={result.shareUrl} aria-label="分享链接" /><button onClick={() => {
               void navigator.clipboard.writeText(result.shareUrl).then(() => setCopied(true));
             }}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "已复制" : "复制"}</button></div>

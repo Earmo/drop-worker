@@ -47,6 +47,7 @@ test("可移植存储备份保留条目与分享但丢弃登录会话", async ()
       tokenHash: "a".repeat(43),
       accessMode: "code",
       codeHash: "b".repeat(43),
+      codeEncrypted: "v1.portable.encrypted",
       now: Date.now(),
       expiresAt: Date.now() + 86_400_000,
     });
@@ -79,6 +80,7 @@ test("可移植存储备份保留条目与分享但丢弃登录会话", async ()
       assert.equal(items.length, 1);
       assert.equal(shares.length, 1);
       assert.equal(shares[0]?.codeHash, "b".repeat(43));
+      assert.equal(shares[0]?.codeEncrypted, "v1.portable.encrypted");
       assert.equal(await targetMetadata.store.getAuthSession("session-token-hash", Date.now()), null);
       const object = await targetBlobs.get(objectKey);
       assert.equal(await new Response(object?.body).text(), "portable-object");
