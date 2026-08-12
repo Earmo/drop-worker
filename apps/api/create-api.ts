@@ -512,13 +512,14 @@ api.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
     return errorResponse(c.get("requestId"), "NOT_FOUND", "文件不存在", 404);
   }
   const fileName = item.displayName || item.originalName || "download";
+  const attachmentOnly = c.req.query("download") === "1";
   const response = await fileDownloadResponse({
     request: c.req.raw,
     blobs: c.env.services.blobs,
     objectKey: item.objectKey,
     fileName,
     mimeType: item.mimeType,
-    attachmentOnly: false,
+    attachmentOnly,
   });
   return response ?? errorResponse(c.get("requestId"), "FILE_MISSING", "文件数据不可用", 404);
 });

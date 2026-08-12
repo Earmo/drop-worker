@@ -1171,7 +1171,7 @@ function ItemEntry({
               <div className="file-glyph"><ImageIcon size={21} /></div>
             )}
             <div><strong>{item.displayName || item.originalName}</strong><span>{formatBytes(item.sizeBytes)} · {item.mimeType || "文件"}</span></div>
-            <a className="download-button" href={`/api/files/${item.id}`} aria-label={`下载 ${item.displayName || item.originalName}`}>
+            <a className="download-button" href={`/api/files/${item.id}?download=1`} download aria-label={`下载 ${item.displayName || item.originalName}`}>
               <Download size={17} />
             </a>
           </div>

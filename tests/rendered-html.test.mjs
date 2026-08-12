@@ -104,3 +104,8 @@ test("分享图片预览仍复用受保护的分享路径", async () => {
   assert.match(api, /\/api\/public\/shares\/:token\/preview/);
   assert.match(api, /hasShareCookie\(c\.req\.raw, share\.id/);
 });
+
+test("文件列表的下载按钮明确请求附件下载", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /className="download-button"[^>]*href=\{`\/api\/files\/\$\{item\.id\}\?download=1`\}/);
+});

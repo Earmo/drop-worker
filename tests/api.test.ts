@@ -209,6 +209,44 @@ test("分片上传可以恢复、完成并下载原始字节", async () => {
   }
 });
 
+test("图片下载请求强制使用附件响应而不是内联预览", async () => {
+  const current = await fixture();
+  try {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const upload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "photo.png",
+        mimeType: "image/png",
+        sizeBytes: bytes.byteLength,
+        fingerprint: "photo.png:8:1234",
+      }),
+    })).json()) as UploadSession;
+    await request(current.services, `/api/uploads/${upload.id}/parts/1`, {
+      method: "PUT",
+      body: bytes,
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": String(bytes.byteLength),
+      },
+    });
+    const item = (await (await request(current.services, `/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    })).json()) as DropItem;
+
+    const preview = await request(current.services, `/api/files/${item.id}`);
+    assert.match(preview.headers.get("content-disposition") || "", /^inline;/);
+
+    const download = await request(current.services, `/api/files/${item.id}?download=1`);
+    assert.match(download.headers.get("content-disposition") || "", /^attachment;/);
+    assert.equal(download.headers.get("content-type"), "application/octet-stream");
+    assert.deepEqual(new Uint8Array(await download.arrayBuffer()), bytes);
+  } finally {
+    await current.close();
+  }
+});
+
 test("硬配额阻止新文件但不阻止文本", async () => {
   const current = await fixture(4);
   try {
