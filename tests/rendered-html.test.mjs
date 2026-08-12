@@ -85,6 +85,12 @@ test("移动端只显示三项底部导航并持续展示有效分享链接", as
   assert.match(css, /grid-template-columns: repeat\(3, 1fr\)/);
 });
 
+test("复制口令分享链接时包含预填口令", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /onCopy\(`\$\{share\.shareUrl\}\$\{share\.code \? `#code=\$\{share\.code\}` : ""\}`/);
+  assert.match(app, /title=\{share\.code \? "复制分享链接和口令" : "复制分享链接"\}/);
+});
+
 test("文本正文使用可选择的文本元素，而不是按钮承载正文", async () => {
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /<button className=\{`text-content/);

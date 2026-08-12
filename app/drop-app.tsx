@@ -913,7 +913,7 @@ function ShareManager({
   onRevoke,
 }: {
   shares: ShareSummary[];
-  onCopy(value: string, kind: "链接" | "口令"): void;
+  onCopy(value: string, kind: "链接" | "口令" | "链接和口令"): void;
   onRevoke(share: ShareSummary): Promise<void>;
 }) {
   const activeCount = shares.filter((share) => share.status === "active").length;
@@ -945,7 +945,11 @@ function ShareManager({
                 {share.status === "active" && share.shareUrl && (
                   <div className="share-row-url">
                     <input readOnly value={share.shareUrl} aria-label={`${share.itemLabel}分享链接`} />
-                    <button onClick={() => onCopy(share.shareUrl!, "链接")} title="复制分享链接" aria-label="复制分享链接"><Copy size={15} /></button>
+                    <button
+                      onClick={() => onCopy(`${share.shareUrl}${share.code ? `#code=${share.code}` : ""}`, share.code ? "链接和口令" : "链接")}
+                      title={share.code ? "复制分享链接和口令" : "复制分享链接"}
+                      aria-label={share.code ? "复制分享链接和口令" : "复制分享链接"}
+                    ><Copy size={15} /></button>
                   </div>
                 )}
               </div>
