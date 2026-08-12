@@ -80,3 +80,14 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("GitHub Actions 在部署 Worker 前应用远程 D1 迁移", async () => {
+  const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
+  const migration = workflow.indexOf("d1 migrations apply DB --remote --config wrangler.jsonc");
+  const emailServiceDeploy = workflow.indexOf("部署 Worker（Cloudflare Email Service）");
+  const smtpDeploy = workflow.indexOf("部署 Worker（自定义 SMTP）");
+
+  assert.ok(migration >= 0, "部署流程必须应用远程 D1 迁移");
+  assert.ok(migration < emailServiceDeploy, "D1 迁移必须早于 Cloudflare Email Service 部署");
+  assert.ok(migration < smtpDeploy, "D1 迁移必须早于 SMTP 部署");
+});

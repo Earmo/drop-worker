@@ -265,7 +265,7 @@ npm run cf:deploy
 
 ### GitHub Actions 自动部署
 
-Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生产配置。代码 push 到 `main` 后会先完成类型检查、Lint、测试和生产构建；全部通过后，部署任务会从 GitHub `production` Environment 读取配置，生成临时 `wrangler.jsonc`，同步 Worker Secret 并自动部署。真实配置不会进入仓库。
+Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生产配置。代码 push 到 `main` 后会先完成类型检查、Lint、测试和生产构建；全部通过后，部署任务会从 GitHub `production` Environment 读取配置，生成临时 `wrangler.jsonc`，先应用待执行的远程 D1 迁移，再同步 Worker Secret 并部署新版 Worker。迁移失败会阻断发布，真实配置不会进入仓库。
 
 在 GitHub 仓库的 `Settings > Environments` 中创建 `production` Environment，并配置以下 Variables：
 

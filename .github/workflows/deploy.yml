@@ -95,6 +95,12 @@ jobs:
           fi
       - name: 构建
         run: npm run build
+      - name: 应用 D1 迁移
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply DB --remote --config wrangler.jsonc
       - name: 部署 Worker（Cloudflare Email Service）
         if: steps.wrangler-config.outputs.email_provider != 'smtp'
         uses: cloudflare/wrangler-action@v3
