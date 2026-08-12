@@ -56,6 +56,21 @@ test("视图筛选切换会清理选择，并使用通用文件选择器", async
   assert.equal((app.match(/accept="\*\/\*"/g) || []).length, 2);
 });
 
+test("输入区域支持拖入多个文件并提供明确的投放状态", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /onDragEnter=/);
+  assert.match(app, /onDragLeave=/);
+  assert.match(app, /onDrop=/);
+  assert.match(app, /dataTransfer\.types\.includes\("Files"\)/);
+  assert.match(app, /addFiles\(Array\.from\(event\.dataTransfer\.files\)\)/);
+  assert.match(app, /松开以添加文件/);
+  assert.match(css, /\.composer\.is-dragging/);
+  assert.match(css, /\.composer-drop-overlay/);
+});
+
 test("移动端只显示三项底部导航并持续展示有效分享链接", async () => {
   const [app, css] = await Promise.all([
     readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),

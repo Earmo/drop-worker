@@ -384,6 +384,7 @@ textarea:focus-visible,
 }
 
 .composer {
+  position: relative;
   margin-bottom: 26px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -391,6 +392,36 @@ textarea:focus-visible,
   background: var(--surface);
   box-shadow: var(--shadow);
   transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.composer.is-dragging {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.composer-drop-overlay {
+  position: absolute;
+  z-index: 2;
+  inset: 6px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 5px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 72%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--accent));
+  color: var(--accent-strong);
+  pointer-events: none;
+}
+
+.composer-drop-overlay strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.composer-drop-overlay span {
+  color: var(--text-muted);
+  font-size: 10px;
 }
 
 .composer:focus-within {
@@ -456,6 +487,11 @@ textarea:focus-visible,
 .item-actions button:hover {
   background: var(--surface-muted);
   color: var(--text);
+}
+
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .send-button,

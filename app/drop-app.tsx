@@ -751,6 +751,8 @@ function Composer({
 }) {
   const [text, setText] = useState(initialText);
   const [sending, setSending] = useState(false);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const addFiles = (files: File[]) => {
     // 拖拽、粘贴和文件选择器共用入口；这里只过滤单文件上限，最终仍由 API 再次校验。
@@ -766,13 +768,40 @@ function Composer({
   };
   return (
     <section
-      className="composer"
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => {
+      className={`composer${draggingFiles ? " is-dragging" : ""}`}
+      aria-label="投递输入区域"
+      onDragEnter={(event) => {
+        if (sending || !event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();
+        dragDepth.current += 1;
+        setDraggingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (sending || !event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDraggingFiles(false);
+      }}
+      onDrop={(event) => {
+        if (!event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDraggingFiles(false);
+        if (sending) return;
         addFiles(Array.from(event.dataTransfer.files));
       }}
     >
+      {draggingFiles && (
+        <div className="composer-drop-overlay" role="status">
+          <FolderUp size={24} />
+          <strong>松开以添加文件</strong>
+          <span>可同时添加多个文件</span>
+        </div>
+      )}
       <textarea
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -805,7 +834,13 @@ function Composer({
       )}
       <div className="composer-footer">
         <div>
-          <button className="icon-button" onClick={() => fileInput.current?.click()} aria-label="选择文件" title="选择文件">
+          <button
+            className="icon-button"
+            onClick={() => fileInput.current?.click()}
+            disabled={sending}
+            aria-label="选择文件"
+            title="选择文件"
+          >
             <Paperclip size={18} />
           </button>
           <input
