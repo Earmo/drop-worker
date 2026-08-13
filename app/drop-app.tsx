@@ -151,7 +151,7 @@ export function DropApp() {
   }, [query, type, view]);
 
   const loadData = useCallback(
-    async (quiet = false, preserveLoaded = quiet) => {
+    async (quiet = false) => {
       if (!auth?.authenticated) return;
       const current = ++refreshVersion.current;
       if (!quiet) setLoading(true);
@@ -163,16 +163,8 @@ export function DropApp() {
           api<ListSharesResponse>("/api/shares"),
         ]);
         if (current !== refreshVersion.current) return;
-        if (preserveLoaded) {
-          // 后台轮询只把新数据置于顶部，保留用户已经滚动加载的旧页，避免页面跳动。
-          setItems((previous) => {
-            const fresh = new Set(list.items.map((item) => item.id));
-            return [...list.items, ...previous.filter((item) => !fresh.has(item.id))];
-          });
-        } else {
-          setItems(list.items);
-          setNextCursor(list.nextCursor);
-        }
+        setItems(list.items);
+        setNextCursor(list.nextCursor);
         setStorage(summary);
         setShares(shareList.shares);
         setClock(Date.now());
@@ -189,7 +181,7 @@ export function DropApp() {
     if (nextCursor === null || loadingMore) return;
     setLoadingMore(true);
     try {
-      // 使用服务端返回的 offset cursor 追加下一页，并按 id 去重，兼容轮询和翻页同时发生。
+      // 使用服务端返回的 offset cursor 追加下一页，并按 id 去重。
       const list = await api<ListItemsResponse>(`/api/items?${listParams(nextCursor)}`);
       setItems((previous) => {
         const existing = new Set(previous.map((item) => item.id));
@@ -215,13 +207,6 @@ export function DropApp() {
     if (!auth?.authenticated) return;
     const timer = window.setTimeout(() => void loadData(), 220);
     return () => window.clearTimeout(timer);
-  }, [auth?.authenticated, loadData]);
-
-  useEffect(() => {
-    // 已登录时每 5 秒静默刷新，保持跨设备投递的时间流近实时，同时不打断用户当前视图。
-    if (!auth?.authenticated) return;
-    const timer = window.setInterval(() => void loadData(true), 5000);
-    return () => window.clearInterval(timer);
   }, [auth?.authenticated, loadData]);
 
   const changeTheme = (next: Theme) => {
@@ -252,7 +237,7 @@ export function DropApp() {
       });
       setSelected(new Set());
       showNotice(action === "restore" ? "已恢复" : action === "purge" ? "已永久删除" : "已移入回收站");
-      await loadData(true, false);
+      await loadData(true);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "操作失败");
     }
@@ -264,7 +249,7 @@ export function DropApp() {
         method: "PATCH",
         body: JSON.stringify(changes),
       });
-      await loadData(true, false);
+      await loadData(true);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "保存失败");
       throw error;
@@ -380,7 +365,7 @@ export function DropApp() {
       await api<DropItem>(`/api/uploads/${session.id}/complete`, { method: "POST", body: "{}" });
       setUploads((current) => current.filter((task) => task.id !== session.id));
       showNotice(`${file.name} 已上传`);
-      await loadData(true, false);
+      await loadData(true);
     } catch (error) {
       const message = error instanceof Error ? error.message : "上传失败";
       setUploads((current) =>
@@ -399,7 +384,7 @@ export function DropApp() {
       for (const file of pendingFiles) await uploadFile(file);
       resetText();
       setPendingFiles([]);
-      await loadData(true, false);
+      await loadData(true);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "投递失败");
     }
@@ -443,7 +428,7 @@ export function DropApp() {
       }
       setSelected(new Set());
       showNotice(ids.length ? `已永久删除 ${ids.length} 项` : "回收站已经为空");
-      await loadData(true, false);
+      await loadData(true);
     } catch (error) {
       showNotice(error instanceof Error ? error.message : "清空回收站失败");
     }
@@ -593,7 +578,7 @@ export function DropApp() {
                 if (!window.confirm(`撤销“${share.itemLabel}”的分享？旧链接将立即失效。`)) return;
                 await api(`/api/shares/${share.id}`, { method: "DELETE" });
                 showNotice("分享已撤销");
-                await loadData(true, false);
+                await loadData(true);
               }}
             />
           )}
@@ -705,7 +690,7 @@ export function DropApp() {
           existing={activeSharesByItem.get(shareTarget.id) || null}
           onClose={() => setShareTarget(null)}
           onCreated={async () => {
-            await loadData(true, false);
+            await loadData(true);
           }}
         />
       )}
