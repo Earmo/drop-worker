@@ -96,7 +96,9 @@ test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版�
   const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
   const actionCount = (workflow.match(/uses: cloudflare\/wrangler-action@v4/g) || []).length;
 
-  assert.equal(actionCount, 3, "迁移和两种部署分支都必须使用 Wrangler Action v4");
+  assert.equal(actionCount, 2, "两种 Worker 部署分支必须使用 Wrangler Action v4");
   assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
-  assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 3);
+  assert.match(workflow, /npx wrangler@4\.118\.0 d1 migrations apply DB --remote --config wrangler\.jsonc/);
+  assert.match(workflow, /CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限/);
+  assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 2);
 });

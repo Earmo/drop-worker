@@ -96,12 +96,15 @@ jobs:
       - name: 构建
         run: npm run build
       - name: 应用 D1 迁移
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.118.0"
-          command: d1 migrations apply DB --remote --config wrangler.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -o pipefail
+          if ! npx wrangler@4.118.0 d1 migrations apply DB --remote --config wrangler.jsonc; then
+            echo "::error::D1 迁移失败。请确认 CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限，并确认 D1_DATABASE_ID 与生产数据库一致。"
+            exit 1
+          fi
       - name: 部署 Worker（Cloudflare Email Service）
         if: steps.wrangler-config.outputs.email_provider != 'smtp'
         uses: cloudflare/wrangler-action@v4

@@ -289,7 +289,7 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 
 | Secret | 用途 | 要求 |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Wrangler 部署凭据 | 必填 |
+| `CLOUDFLARE_API_TOKEN` | Wrangler 部署与 D1 迁移凭据 | 必填；需要目标账号的 Workers 编辑权限和 D1 编辑权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
 | `D1_DATABASE_ID` | 生产 D1 数据库 UUID | 必填 |
 | `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
