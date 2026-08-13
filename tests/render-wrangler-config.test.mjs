@@ -91,3 +91,12 @@ test("GitHub Actions 在部署 Worker 前应用远程 D1 迁移", async () => {
   assert.ok(migration < emailServiceDeploy, "D1 迁移必须早于 Cloudflare Email Service 部署");
   assert.ok(migration < smtpDeploy, "D1 迁移必须早于 SMTP 部署");
 });
+
+test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版本", async () => {
+  const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
+  const actionCount = (workflow.match(/uses: cloudflare\/wrangler-action@v4/g) || []).length;
+
+  assert.equal(actionCount, 3, "迁移和两种部署分支都必须使用 Wrangler Action v4");
+  assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
+  assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 3);
+});
