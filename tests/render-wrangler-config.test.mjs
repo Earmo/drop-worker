@@ -24,6 +24,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
         R2_ACCOUNT_ID: "1234567890abcdef",
+        R2_PUBLIC_URL: "https://drop-files.example.com",
         PUBLIC_URL: "https://drop.example.com",
         SHARING_ENABLED: "true",
         OWNER_EMAIL: "owner@example.com",
@@ -45,15 +46,16 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     assert.equal(config.vars.PUBLIC_URL, "https://drop.example.com");
     assert.equal(config.vars.R2_ACCOUNT_ID, "1234567890abcdef");
     assert.equal(config.vars.R2_BUCKET_NAME, "drop-worker-files");
+    assert.equal(config.vars.R2_PUBLIC_URL, "https://drop-files.example.com/");
     assert.equal(config.send_email, undefined);
     const cors = JSON.parse(await readFile(join(root, "r2-cors.json"), "utf8"));
     assert.deepEqual(cors.rules[0], {
       allowed: {
         origins: ["https://drop.example.com"],
-        methods: ["PUT"],
-        headers: ["content-type"],
+        methods: ["GET", "HEAD", "PUT"],
+        headers: ["content-type", "range"],
       },
-      exposeHeaders: ["etag"],
+      exposeHeaders: ["accept-ranges", "content-disposition", "content-length", "content-range", "etag"],
       maxAgeSeconds: 3600,
     });
   } finally {
@@ -90,6 +92,35 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
 
     const config = JSON.parse(await readFile(output, "utf8"));
     assert.equal(config.vars.SHARING_ENABLED, "true");
+    assert.equal(config.vars.R2_PUBLIC_URL, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
+  const root = await mkdtemp(join(tmpdir(), "drop-worker-render-"));
+  try {
+    const output = join(root, "wrangler.jsonc");
+    await assert.rejects(
+      execFileAsync(process.execPath, [renderScript, output], {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          WORKER_NAME: "drop-worker",
+          D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
+          R2_ACCOUNT_ID: "1234567890abcdef",
+          R2_PUBLIC_URL: "http://drop-files.example.com",
+          PUBLIC_URL: "https://drop.example.com",
+          OWNER_EMAIL: "owner@example.com",
+          AUTH_EMAIL_PROVIDER: "smtp",
+          SMTP_HOST: "smtp.example.com",
+          SMTP_PORT: "587",
+          SMTP_FROM: "owner@example.com",
+        },
+      }),
+      /R2_PUBLIC_URL 必须是没有路径、查询参数或凭据的 HTTPS 站点根地址/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -114,6 +145,8 @@ test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版�
   assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
   assert.match(workflow, /npx wrangler@4\.118\.0 d1 migrations apply DB --remote --config wrangler\.jsonc/);
   assert.match(workflow, /r2 bucket cors set "\$R2_BUCKET_NAME" --file/);
+  assert.match(workflow, /R2_PUBLIC_URL: \$\{\{ vars\.R2_PUBLIC_URL \}\}/);
+  assert.equal((workflow.match(/command: deploy --config wrangler\.jsonc --keep-vars/g) || []).length, 2);
   assert.match(workflow, /R2_ACCESS_KEY_ID/);
   assert.match(workflow, /R2_SECRET_ACCESS_KEY/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限/);

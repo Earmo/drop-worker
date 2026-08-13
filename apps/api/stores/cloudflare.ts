@@ -51,9 +51,9 @@ export class R2BlobStore implements BlobStore {
     return (await this.bucket.list({ limit: 1 })).objects.length === 0;
   }
 
-  async createMultipart(objectKey: string, contentType: string): Promise<string> {
+  async createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string> {
     const upload = await this.bucket.createMultipartUpload(objectKey, {
-      httpMetadata: { contentType },
+      httpMetadata: { contentType, contentDisposition },
     });
     return upload.uploadId;
   }

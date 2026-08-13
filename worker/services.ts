@@ -65,6 +65,9 @@ export function createCloudflareServices(env: Env): RuntimeServices {
   const shareSecret = env.AUTH_SESSION_SECRET || (development ? "drop-worker-development-share-secret" : "");
   if (shareSecret.length < 32) throw new Error("AUTH_SESSION_SECRET 至少需要 32 个字符才能启用分享");
   const publicUrl = validatePublicUrl(env.PUBLIC_URL || (development ? "http://localhost:3000" : ""));
+  const publicFilesUrl = env.R2_PUBLIC_URL?.trim()
+    ? validatePublicUrl(env.R2_PUBLIC_URL.trim())
+    : undefined;
   const r2AccessKeyId = env.R2_ACCESS_KEY_ID?.trim();
   const r2SecretAccessKey = env.R2_SECRET_ACCESS_KEY?.trim();
   if (Boolean(r2AccessKeyId) !== Boolean(r2SecretAccessKey)) {
@@ -87,6 +90,7 @@ export function createCloudflareServices(env: Env): RuntimeServices {
           secretAccessKey: r2SecretAccessKey!,
         })
       : undefined,
+    publicFilesUrl,
     quotaBytes: Number.isFinite(quota) && quota > 0 ? quota : 10 * 1024 * 1024 * 1024,
     authMode: emailAuth
       ? "smtp-otp"

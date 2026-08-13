@@ -69,12 +69,15 @@ export class R2DirectUploadService implements DirectUploadService {
     throw new Error(`R2 S3 请求失败 (${response.status})${detail ? `: ${detail}` : ""}`);
   }
 
-  async createMultipart(objectKey: string, contentType: string): Promise<string> {
+  async createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string> {
     const url = this.objectUrl(objectKey);
     url.searchParams.set("uploads", "");
     const response = await this.fetch(new Request(url, {
       method: "POST",
-      headers: { "content-type": contentType },
+      headers: {
+        "content-type": contentType,
+        ...(contentDisposition ? { "content-disposition": contentDisposition } : {}),
+      },
     }));
     return `${DIRECT_UPLOAD_ID_PREFIX}${xmlValue(await response.text(), "UploadId")}`;
   }

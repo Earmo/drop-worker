@@ -106,9 +106,10 @@ export class LocalBlobStore implements BlobStore {
     return (await readdir(this.objectsRoot)).length === 0;
   }
 
-  async createMultipart(objectKey: string, contentType: string): Promise<string> {
+  async createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string> {
     void objectKey;
     void contentType;
+    void contentDisposition;
     const uploadId = crypto.randomUUID();
     await mkdir(safeStoragePath(this.uploadsRoot, uploadId), { recursive: true });
     return uploadId;

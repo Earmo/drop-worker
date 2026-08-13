@@ -4,12 +4,13 @@ import { R2DirectUploadService } from "../worker/r2-direct-uploads";
 
 test("R2 直传服务签发 multipart 分片 URL 并完成同一 S3 会话", async () => {
   const originalFetch = globalThis.fetch;
-  const requests: Array<{ method: string; url: string; body: Promise<string> }> = [];
+  const requests: Array<{ method: string; url: string; headers: Headers; body: Promise<string> }> = [];
   globalThis.fetch = async (input) => {
     const request = input instanceof Request ? input : new Request(input);
     requests.push({
       method: request.method,
       url: request.url,
+      headers: request.headers,
       body: request.clone().text(),
     });
     const url = new URL(request.url);
@@ -27,8 +28,15 @@ test("R2 直传服务签发 multipart 分片 URL 并完成同一 S3 会话", asy
       accessKeyId: "test-access-key",
       secretAccessKey: "test-secret-key",
     });
-    const uploadId = await direct.createMultipart("objects/a/b", "application/octet-stream");
+    const uploadId = await direct.createMultipart(
+      "objects/a/b",
+      "application/octet-stream",
+      "attachment; filename*=UTF-8''example.txt",
+    );
     assert.equal(uploadId, "r2-s3:provider-upload-id");
+    const create = requests.find((request) => request.method === "POST" && new URL(request.url).searchParams.has("uploads"));
+    assert.ok(create);
+    assert.equal(create.headers.get("content-disposition"), "attachment; filename*=UTF-8''example.txt");
 
     const signedUrl = new URL(await direct.createPartUploadUrl("objects/a/b", uploadId, 2, 900));
     assert.equal(signedUrl.hostname, "0123456789abcdef.r2.cloudflarestorage.com");

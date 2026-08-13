@@ -406,6 +406,56 @@ test("图片下载请求强制使用附件响应而不是内联预览", async ()
   }
 });
 
+test("公开 R2 地址只接管下载且保留图片预览", async () => {
+  const current = await fixture();
+  try {
+    current.services.publicFilesUrl = new URL("https://drop-files.example.com/base/");
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+    const upload = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "nested image.png",
+        mimeType: "image/png",
+        sizeBytes: bytes.byteLength,
+        fingerprint: "public-r2-download:4:1",
+      }),
+    })).json()) as UploadSession;
+    await request(current.services, `/api/uploads/${upload.id}/parts/1`, {
+      method: "PUT",
+      body: bytes,
+      headers: { "content-length": String(bytes.byteLength), "content-type": "application/octet-stream" },
+    });
+    const item = (await (await request(current.services, `/api/uploads/${upload.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    })).json()) as DropItem;
+
+    const preview = await request(current.services, `/api/files/${item.id}`);
+    assert.equal(preview.status, 200);
+    assert.equal(preview.headers.get("content-type"), "image/png");
+
+    const download = await request(current.services, `/api/files/${item.id}?download=1`);
+    const stored = await current.services.metadata.getItem("test-owner", item.id);
+    assert.ok(stored?.objectKey);
+    assert.equal(download.status, 307);
+    assert.equal(
+      download.headers.get("location"),
+      `https://drop-files.example.com/base/${stored.objectKey}`,
+    );
+
+    const created = (await (await request(current.services, `/api/items/${item.id}/share`, {
+      method: "POST",
+      body: JSON.stringify({ accessMode: "public", expiresInSeconds: 3_600 }),
+    })).json()) as CreateShareResponse;
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    const sharedDownload = await request(current.services, `/api/public/shares/${token}/download`);
+    assert.equal(sharedDownload.status, 307);
+    assert.equal(sharedDownload.headers.get("location"), download.headers.get("location"));
+  } finally {
+    await current.close();
+  }
+});
+
 test("硬配额阻止新文件但不阻止文本", async () => {
   const current = await fixture(4);
   try {

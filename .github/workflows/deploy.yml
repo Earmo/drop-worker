@@ -65,6 +65,7 @@ jobs:
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
           R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
           AUTH_EMAIL_PROVIDER: ${{ vars.AUTH_EMAIL_PROVIDER }}
           MAX_STORAGE_BYTES: ${{ vars.MAX_STORAGE_BYTES }}
           PUBLIC_URL: ${{ vars.PUBLIC_URL }}
@@ -125,7 +126,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.118.0"
-          command: deploy --config wrangler.jsonc
+          command: deploy --config wrangler.jsonc --keep-vars
           secrets: |
             AUTH_SESSION_SECRET
             R2_ACCESS_KEY_ID
@@ -141,7 +142,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.118.0"
-          command: deploy --config wrangler.jsonc
+          command: deploy --config wrangler.jsonc --keep-vars
           secrets: |
             AUTH_SESSION_SECRET
             SMTP_USERNAME

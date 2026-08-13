@@ -67,6 +67,8 @@
     "R2_ACCOUNT_ID": "<CLOUDFLARE_ACCOUNT_ID>",
     // 必须与上面的 FILES 绑定指向同一个桶。
     "R2_BUCKET_NAME": "drop-worker-files",
+    // 可选的公开 R2 自定义域名；配置后下载会在权限校验后重定向到该地址。
+    "R2_PUBLIC_URL": "https://drop-files.example.com",
     // 唯一允许登录的个人邮箱，也用于接收验证码。
     "OWNER_EMAIL": "you@example.com",
     // 验证码邮件的发件地址；使用 Cloudflare Email Service 时必须是已验证域名地址。

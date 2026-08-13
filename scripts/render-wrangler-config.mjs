@@ -34,6 +34,8 @@ const authFromEmail = readValue("AUTH_FROM_EMAIL");
 const authFromName = requireValue("AUTH_FROM_NAME", workerName);
 const maxStorageBytes = requireValue("MAX_STORAGE_BYTES", "10737418240");
 const publicUrl = requireValue("PUBLIC_URL");
+const r2PublicUrlValue = readValue("R2_PUBLIC_URL");
+const r2PublicUrl = r2PublicUrlValue ? new URL(r2PublicUrlValue) : null;
 const sharingEnabled = requireOneOf("SHARING_ENABLED", ["true", "false"], "true");
 const smtpHost = readValue("SMTP_HOST");
 const smtpPort = requireValue("SMTP_PORT", "587");
@@ -46,6 +48,16 @@ if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(databaseId)) {
 }
 if (!/^\d+$/.test(maxStorageBytes) || BigInt(maxStorageBytes) <= 0n) {
   throw new Error("MAX_STORAGE_BYTES 必须是正整数");
+}
+if (r2PublicUrl && (
+  r2PublicUrl.protocol !== "https:"
+  || r2PublicUrl.username
+  || r2PublicUrl.password
+  || r2PublicUrl.pathname !== "/"
+  || r2PublicUrl.search
+  || r2PublicUrl.hash
+)) {
+  throw new Error("R2_PUBLIC_URL 必须是没有路径、查询参数或凭据的 HTTPS 站点根地址");
 }
 if (!/^\d+$/.test(smtpTimeoutMs) || Number(smtpTimeoutMs) < 3000 || Number(smtpTimeoutMs) > 30000) {
   throw new Error("SMTP_TIMEOUT_MS 必须是 3000 到 30000 之间的整数");
@@ -104,6 +116,7 @@ const config = {
     SHARING_ENABLED: sharingEnabled,
     R2_ACCOUNT_ID: r2AccountId,
     R2_BUCKET_NAME: bucketName,
+    ...(r2PublicUrl ? { R2_PUBLIC_URL: r2PublicUrl.toString() } : {}),
     OWNER_EMAIL: ownerEmail,
     AUTH_FROM_EMAIL: authFromEmail,
     AUTH_FROM_NAME: authFromName,
@@ -137,10 +150,10 @@ await writeFile(corsPath, `${JSON.stringify({
     {
       allowed: {
         origins: [new URL(publicUrl).origin],
-        methods: ["PUT"],
-        headers: ["content-type"],
+        methods: ["GET", "HEAD", "PUT"],
+        headers: ["content-type", "range"],
       },
-      exposeHeaders: ["etag"],
+      exposeHeaders: ["accept-ranges", "content-disposition", "content-length", "content-range", "etag"],
       maxAgeSeconds: 3_600,
     },
   ],

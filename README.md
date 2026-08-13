@@ -206,7 +206,7 @@ Copy-Item wrangler.example.jsonc wrangler.jsonc
 3. 为目标 R2 桶创建“对象读写”S3 API Token，把 Access Key ID 和 Secret Access Key 分别保存为 `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` Worker Secret，并在变量中配置 `R2_ACCOUNT_ID` 与 `R2_BUCKET_NAME`。
 4. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
 5. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
-6. 为 R2 桶配置只允许 `PUBLIC_URL` 来源执行 `PUT`、并暴露 `ETag` 的 CORS。GitHub Actions 会自动生成并应用该配置；手工部署可参考下方命令。
+6. 为 R2 桶配置只允许 `PUBLIC_URL` 来源执行 `GET`、`HEAD`、`PUT`，允许 `Range`，并暴露下载响应头的 CORS。GitHub Actions 会自动生成并应用该配置；手工部署可参考下方命令。
 7. 生成类型并应用 D1 迁移。
 8. 构建并部署 Worker。
 
@@ -220,6 +220,8 @@ npm run cf:deploy
 
 生产环境上传使用 16 MiB 分片和四路并发，浏览器通过 15 分钟有效的预签名 URL 直接写入私有 R2 桶；Worker 只负责登录校验、配额、签名、分片确认和完成上传。未配置 R2 S3 API 凭据时会回退到 Worker 代理上传，便于本地开发，但生产部署流程会把缺少凭据视为配置错误。
 
+可选配置 `R2_PUBLIC_URL` 为 R2 桶的公开自定义域名，例如 `https://drop-files.example.com`。配置后，文件下载会先经过应用的登录或分享权限校验，再重定向到 R2 自定义域名；图片预览仍由应用受控返回。该模式不会对最终 R2 地址继续鉴权，任何拿到对象直链的人都可以访问，直到对象被删除或更换对象键。
+
 手工部署时可创建临时 `r2-cors.json` 并应用：
 
 ```json
@@ -228,10 +230,10 @@ npm run cf:deploy
     {
       "allowed": {
         "origins": ["https://drop.example.com"],
-        "methods": ["PUT"],
-        "headers": ["content-type"]
+        "methods": ["GET", "HEAD", "PUT"],
+        "headers": ["content-type", "range"]
       },
-      "exposeHeaders": ["etag"],
+      "exposeHeaders": ["accept-ranges", "content-disposition", "content-length", "content-range", "etag"],
       "maxAgeSeconds": 3600
     }
   ]
@@ -302,6 +304,7 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `WORKER_NAME` | Worker 名称 | `drop-worker` |
 | `D1_DATABASE_NAME` | D1 数据库名称 | 与 Worker 名称相同 |
 | `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
+| `R2_PUBLIC_URL` | 可选的公开 R2 自定义下载域名 | 空，继续由 Worker 返回文件 |
 | `AUTH_EMAIL_PROVIDER` | `cloudflare` 或 `smtp` | `cloudflare` |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
 | `PUBLIC_URL` | 生成分享链接的可信 HTTPS 地址 | 必填 |

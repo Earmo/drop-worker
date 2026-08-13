@@ -134,11 +134,12 @@ export class S3BlobStore implements BlobStore {
     return (result.KeyCount || 0) === 0;
   }
 
-  async createMultipart(objectKey: string, contentType: string): Promise<string> {
+  async createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string> {
     const result = await this.client.send(new CreateMultipartUploadCommand({
       Bucket: this.config.bucket,
       Key: this.key(objectKey),
       ContentType: contentType,
+      ContentDisposition: contentDisposition,
       ServerSideEncryption: this.config.serverSideEncryption,
       SSEKMSKeyId: this.config.kmsKeyId,
     }));

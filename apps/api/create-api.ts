@@ -89,6 +89,27 @@ async function resolvePublicShare(services: RuntimeServices, token: string, now:
   return share;
 }
 
+function attachmentContentDisposition(fileName: string): string {
+  return `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
+async function publicFileRedirect(
+  services: RuntimeServices,
+  objectKey: string,
+): Promise<Response | null> {
+  if (!services.publicFilesUrl) return null;
+  if (await services.blobs.size(objectKey) === null) return null;
+  const encodedKey = objectKey.split("/").map(encodeURIComponent).join("/");
+  const target = new URL(encodedKey, services.publicFilesUrl);
+  return new Response(null, {
+    status: 307,
+    headers: {
+      location: target.toString(),
+      "cache-control": "private, no-store",
+    },
+  });
+}
+
 api.get("/api/public/shares/:token", async (c) => {
   const now = Date.now();
   const token = c.req.param("token");
@@ -207,17 +228,19 @@ api.on(["GET", "HEAD"], "/api/public/shares/:token/download", async (c) => {
   ) {
     return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
   }
-  const response = await fileDownloadResponse({
-    request: c.req.raw,
-    blobs: c.env.services.blobs,
-    objectKey: share.item.objectKey,
-    fileName: share.item.displayName || share.item.originalName || "download",
-    mimeType: share.item.mimeType,
-    attachmentOnly: true,
-  });
+  const response = c.env.services.publicFilesUrl
+    ? await publicFileRedirect(c.env.services, share.item.objectKey)
+    : await fileDownloadResponse({
+        request: c.req.raw,
+        blobs: c.env.services.blobs,
+        objectKey: share.item.objectKey,
+        fileName: share.item.displayName || share.item.originalName || "download",
+        mimeType: share.item.mimeType,
+        attachmentOnly: true,
+      });
   if (!response) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
   const startsDownload = !c.req.header("range");
-  if (c.req.method === "GET" && startsDownload && (response.status === 200 || response.status === 206)) {
+  if (c.req.method === "GET" && startsDownload && (response.status === 200 || response.status === 206 || response.status === 307)) {
     await c.env.services.metadata.recordShareAccess(share.id, now, true);
   }
   response.headers.set("x-robots-tag", "noindex, nofollow, noarchive");
@@ -404,11 +427,12 @@ api.post("/api/uploads", async (c) => {
   }
   const ownerId = c.get("identity").ownerId;
   const objectKey = `objects/${crypto.randomUUID()}`;
+  const contentDisposition = attachmentContentDisposition(parsed.data.fileName);
   // 先创建存储供应商的 multipart 会话，再在同一个请求中原子预留数据库配额。
   // 任一步失败都要主动 abort，避免留下无法被用户看到的孤儿 multipart 会话。
   const providerUploadId = c.env.services.directUploads
-    ? await c.env.services.directUploads.createMultipart(objectKey, parsed.data.mimeType)
-    : await c.env.services.blobs.createMultipart(objectKey, parsed.data.mimeType);
+    ? await c.env.services.directUploads.createMultipart(objectKey, parsed.data.mimeType, contentDisposition)
+    : await c.env.services.blobs.createMultipart(objectKey, parsed.data.mimeType, contentDisposition);
   const now = Date.now();
   let upload;
   try {
@@ -609,6 +633,10 @@ api.on(["GET", "HEAD"], "/api/files/:id", async (c) => {
   }
   const fileName = item.displayName || item.originalName || "download";
   const attachmentOnly = c.req.query("download") === "1";
+  if (c.env.services.publicFilesUrl && (attachmentOnly || !isPreviewableImage(item.mimeType))) {
+    const redirect = await publicFileRedirect(c.env.services, item.objectKey);
+    return redirect ?? errorResponse(c.get("requestId"), "FILE_MISSING", "文件数据不可用", 404);
+  }
   const response = await fileDownloadResponse({
     request: c.req.raw,
     blobs: c.env.services.blobs,

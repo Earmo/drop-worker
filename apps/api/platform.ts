@@ -193,7 +193,7 @@ export type BlobRange = {
 export interface BlobStore {
   healthCheck(): Promise<void>;
   isEmpty(): Promise<boolean>;
-  createMultipart(objectKey: string, contentType: string): Promise<string>;
+  createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string>;
   putPart(
     objectKey: string,
     uploadId: string,
@@ -214,7 +214,7 @@ export interface BlobStore {
 
 export interface DirectUploadService {
   isManagedUpload(uploadId: string): boolean;
-  createMultipart(objectKey: string, contentType: string): Promise<string>;
+  createMultipart(objectKey: string, contentType: string, contentDisposition?: string): Promise<string>;
   createPartUploadUrl(
     objectKey: string,
     uploadId: string,
@@ -235,6 +235,7 @@ export type RuntimeServices = {
   metadata: MetadataStore;
   blobs: BlobStore;
   directUploads?: DirectUploadService;
+  publicFilesUrl?: URL;
   quotaBytes: number;
   resolveIdentity(request: Request): Promise<Identity | null>;
   authMode: "platform" | "password" | "smtp-otp" | "development";
