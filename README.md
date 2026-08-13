@@ -203,15 +203,43 @@ Copy-Item wrangler.example.jsonc wrangler.jsonc
 
 1. 在 Cloudflare Email Service 中启用发信域名，并验证接收验证码的个人邮箱。
 2. 配置 `OWNER_EMAIL`、`AUTH_FROM_EMAIL` 和 `AUTH_FROM_NAME`。`AUTH_FROM_EMAIL` 必须属于已在 Email Service 中验证的域名；`send_email` 绑定固定收件人，发件地址可以按配置切换。
-3. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
-4. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
-5. 生成类型并应用 D1 迁移。
-6. 构建并部署 Worker。
+3. 为目标 R2 桶创建“对象读写”S3 API Token，把 Access Key ID 和 Secret Access Key 分别保存为 `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` Worker Secret，并在变量中配置 `R2_ACCOUNT_ID` 与 `R2_BUCKET_NAME`。
+4. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
+5. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
+6. 为 R2 桶配置只允许 `PUBLIC_URL` 来源执行 `PUT`、并暴露 `ETag` 的 CORS。GitHub Actions 会自动生成并应用该配置；手工部署可参考下方命令。
+7. 生成类型并应用 D1 迁移。
+8. 构建并部署 Worker。
 
 ```powershell
+"你的 R2 Access Key ID" | npx wrangler secret put R2_ACCESS_KEY_ID --config wrangler.jsonc
+"你的 R2 Secret Access Key" | npx wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.jsonc
 npm run cf:types
 npx wrangler d1 migrations apply drop-worker --remote --config wrangler.jsonc
 npm run cf:deploy
+```
+
+生产环境上传使用 16 MiB 分片和四路并发，浏览器通过 15 分钟有效的预签名 URL 直接写入私有 R2 桶；Worker 只负责登录校验、配额、签名、分片确认和完成上传。未配置 R2 S3 API 凭据时会回退到 Worker 代理上传，便于本地开发，但生产部署流程会把缺少凭据视为配置错误。
+
+手工部署时可创建临时 `r2-cors.json` 并应用：
+
+```json
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": ["https://drop.example.com"],
+        "methods": ["PUT"],
+        "headers": ["content-type"]
+      },
+      "exposeHeaders": ["etag"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}
+```
+
+```powershell
+npx wrangler r2 bucket cors set drop-worker-files --file r2-cors.json --force
 ```
 
 验证码 10 分钟有效，连续输入错误 5 次后失效，同一邮箱 60 秒内不能重复发送。登录会话通过 HttpOnly、Secure Cookie 保持 30 天；R2 桶保持私有。
@@ -289,12 +317,14 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 
 | Secret | 用途 | 要求 |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Wrangler 部署与 D1 迁移凭据 | 必填；需要目标账号的 Workers 编辑权限和 D1 编辑权限 |
+| `CLOUDFLARE_API_TOKEN` | Wrangler 部署、D1 迁移与 R2 CORS 配置凭据 | 必填；需要目标账号的 Workers、D1 与 R2 编辑权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
 | `D1_DATABASE_ID` | 生产 D1 数据库 UUID | 必填 |
 | `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
 | `AUTH_FROM_EMAIL` | Cloudflare Email Service 发件地址或 SMTP 回退地址 | Cloudflare 发信时必填 |
 | `AUTH_SESSION_SECRET` | 30 天会话签名密钥 | 必填，至少 32 字节随机值 |
+| `R2_ACCESS_KEY_ID` | R2 S3 API Access Key ID | 必填；只授予目标桶对象读写权限 |
+| `R2_SECRET_ACCESS_KEY` | R2 S3 API Secret Access Key | 必填；保存后不会发送到浏览器 |
 | `SMTP_HOST` | 自定义 SMTP 服务器 | SMTP 模式必填 |
 | `SMTP_FROM` | 自定义 SMTP 实际发件地址 | SMTP 模式可与 `AUTH_FROM_EMAIL` 二选一 |
 | `SMTP_USERNAME` | SMTP 用户名 | SMTP 模式必填 |

@@ -43,7 +43,8 @@ import type {
   ListSharesResponse,
   ShareSummary,
   StorageSummary,
-  UploadSession,
+  UploadPartUrl,
+  UploadSessionResponse,
 } from "../packages/contracts";
 import { api, withRetry } from "./client/api";
 import { formatBytes, formatTime, typeLabel } from "./client/format";
@@ -53,6 +54,7 @@ import {
   readSavedUploads,
   saveUploads,
   type UploadTask,
+  UPLOAD_CONCURRENCY,
 } from "./client/uploads";
 
 type View = "timeline" | "favorites" | "shares" | "cleanup" | "trash";
@@ -281,13 +283,13 @@ export function DropApp() {
 
   const uploadFile = async (file: File, existing?: UploadTask) => {
     const fingerprint = fileFingerprint(file);
-    let session: UploadSession;
+    let session: UploadSessionResponse;
     try {
       // 有 existing 时先读取服务端任务，否则创建新 multipart 会话；两条路径最后汇合到同一上传循环。
       if (existing) {
-        session = await api<UploadSession>(`/api/uploads/${existing.id}`);
+        session = await api<UploadSessionResponse>(`/api/uploads/${existing.id}`);
       } else {
-        session = await api<UploadSession>("/api/uploads", {
+        session = await api<UploadSessionResponse>("/api/uploads", {
           method: "POST",
           body: JSON.stringify({
             fileName: file.name,
@@ -312,26 +314,67 @@ export function DropApp() {
         },
       ]);
       const completedParts = new Map(session.parts.map((part) => [part.partNumber, part]));
-      const partCount = Math.ceil(file.size / PART_SIZE);
-      // 逐片跳过服务端已经确认的 partNumber，实现刷新/换设备后的断点续传。
-      for (let index = 0; index < partCount; index += 1) {
-        const partNumber = index + 1;
-        if (completedParts.has(partNumber)) continue;
-        const start = index * PART_SIZE;
-        const chunk = file.slice(start, Math.min(file.size, start + PART_SIZE));
-        session = await withRetry(() =>
-          api<UploadSession>(`/api/uploads/${session.id}/parts/${partNumber}`, {
-            method: "PUT",
-            body: chunk,
-            headers: { "content-type": "application/octet-stream" },
-          }),
-        );
-        const uploaded = session.parts.reduce((total, part) => total + part.sizeBytes, 0);
+      // 已开始的代理上传可能来自旧版 8 MiB 分片；从首个非末片恢复原大小，避免升级后错位。
+      const legacyPartSize = session.parts.find((part) => part.sizeBytes < file.size)?.sizeBytes;
+      const partSize = session.uploadMode === "direct" ? PART_SIZE : legacyPartSize || PART_SIZE;
+      const partCount = Math.ceil(file.size / partSize);
+      const pendingPartNumbers = Array.from({ length: partCount }, (_, index) => index + 1)
+        .filter((partNumber) => !completedParts.has(partNumber));
+      let transferredBytes = session.parts.reduce((total, part) => total + part.sizeBytes, 0);
+      const updateProgress = (uploaded = transferredBytes) => {
         setUploads((current) =>
           current.map((task) =>
             task.id === session.id ? { ...task, progress: uploaded / file.size, status: "uploading" } : task,
           ),
         );
+      };
+      if (session.uploadMode === "direct") {
+        // 一批只申请四个短期 URL；分片并发直达 R2，完成后再用一个 API 请求批量确认 ETag。
+        for (let offset = 0; offset < pendingPartNumbers.length; offset += UPLOAD_CONCURRENCY) {
+          const partNumbers = pendingPartNumbers.slice(offset, offset + UPLOAD_CONCURRENCY);
+          const { urls } = await api<{ urls: UploadPartUrl[] }>(`/api/uploads/${session.id}/part-urls`, {
+            method: "POST",
+            body: JSON.stringify({ partNumbers }),
+          });
+          const urlByPart = new Map(urls.map((value) => [value.partNumber, value.url]));
+          const parts = await Promise.all(partNumbers.map(async (partNumber) => {
+            const url = urlByPart.get(partNumber);
+            if (!url) throw new Error("服务端未返回完整的分片上传地址");
+            const start = (partNumber - 1) * partSize;
+            const chunk = file.slice(start, Math.min(file.size, start + partSize));
+            const response = await withRetry(async () => {
+              const result = await fetch(url, { method: "PUT", body: chunk });
+              if (!result.ok) throw new Error(`R2 分片上传失败 (${result.status})`);
+              return result;
+            });
+            const etag = response.headers.get("etag");
+            if (!etag) throw new Error("R2 未返回分片 ETag，请检查存储桶 CORS 配置");
+            transferredBytes += chunk.size;
+            updateProgress();
+            return { partNumber, etag };
+          }));
+          session = await withRetry(() => api<UploadSessionResponse>(`/api/uploads/${session.id}/parts/confirm`, {
+            method: "POST",
+            body: JSON.stringify({ parts }),
+          }));
+          transferredBytes = session.parts.reduce((total, part) => total + part.sizeBytes, 0);
+          updateProgress();
+        }
+      } else {
+        // 本地文件系统和通用 S3 继续走应用代理，保持既有部署零配置可用。
+        for (const partNumber of pendingPartNumbers) {
+          const start = (partNumber - 1) * partSize;
+          const chunk = file.slice(start, Math.min(file.size, start + partSize));
+          session = await withRetry(() =>
+            api<UploadSessionResponse>(`/api/uploads/${session.id}/parts/${partNumber}`, {
+              method: "PUT",
+              body: chunk,
+              headers: { "content-type": "application/octet-stream" },
+            }),
+          );
+          transferredBytes = session.parts.reduce((total, part) => total + part.sizeBytes, 0);
+          updateProgress();
+        }
       }
       // 所有分片都确认后才调用 complete；完成失败会保留任务状态，下一次可以继续重试。
       await api<DropItem>(`/api/uploads/${session.id}/complete`, { method: "POST", body: "{}" });

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const UPLOAD_PART_SIZE = 16 * 1024 * 1024;
+export const UPLOAD_CONCURRENCY = 4;
+
 export const itemTypeSchema = z.enum(["text", "link", "file"]);
 export type ItemType = z.infer<typeof itemTypeSchema>;
 
@@ -56,7 +59,7 @@ export const bulkActionSchema = z.object({
 });
 
 export const uploadCreateSchema = z.object({
-  // 创建上传时只接受文件元数据；文件正文随后按 8 MB 左右的分片发送。
+  // 创建上传时只接受文件元数据；文件正文随后按 16 MiB 分片发送。
   fileName: z.string().trim().min(1).max(255),
   mimeType: z.string().trim().min(1).max(255).default("application/octet-stream"),
   sizeBytes: z.number().int().positive().max(500 * 1024 * 1024),
@@ -65,10 +68,21 @@ export const uploadCreateSchema = z.object({
 
 export const uploadedPartSchema = z.object({
   partNumber: z.number().int().min(1).max(10_000),
-  etag: z.string().min(1),
+  etag: z.string().min(1).max(256),
   sizeBytes: z.number().int().positive(),
 });
 export type UploadedPart = z.infer<typeof uploadedPartSchema>;
+
+export const uploadPartUrlsSchema = z.object({
+  partNumbers: z.array(z.number().int().min(1).max(10_000)).min(1).max(UPLOAD_CONCURRENCY),
+});
+
+export const uploadPartsConfirmSchema = z.object({
+  parts: z.array(z.object({
+    partNumber: z.number().int().min(1).max(10_000),
+    etag: z.string().trim().min(1).max(256).regex(/^[\x20-\x7e]+$/),
+  })).min(1).max(UPLOAD_CONCURRENCY),
+});
 
 export const uploadSessionSchema = z.object({
   // 客户端把该会话持久化到 localStorage，用 fingerprint 将本地文件与服务端任务绑定。
@@ -83,6 +97,16 @@ export const uploadSessionSchema = z.object({
   expiresAt: z.number().int(),
 });
 export type UploadSession = z.infer<typeof uploadSessionSchema>;
+
+export type UploadSessionResponse = UploadSession & {
+  uploadMode: "direct" | "proxy";
+};
+
+export type UploadPartUrl = {
+  partNumber: number;
+  url: string;
+  expiresAt: number;
+};
 
 export const storageSummarySchema = z.object({
   usedBytes: z.number().int().nonnegative(),

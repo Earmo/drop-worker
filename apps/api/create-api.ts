@@ -7,9 +7,13 @@ import {
   listItemsQuerySchema,
   updateItemSchema,
   uploadCreateSchema,
+  uploadPartUrlsSchema,
+  uploadPartsConfirmSchema,
   verifyShareSchema,
+  UPLOAD_PART_SIZE,
   type ExportBundle,
   type PublicShareContent,
+  type UploadPartUrl,
 } from "../../packages/contracts";
 import {
   errorResponse,
@@ -20,6 +24,7 @@ import {
 } from "./http";
 import type { RuntimeServices } from "./platform";
 import { fileDownloadResponse, isPreviewableImage } from "./download";
+import { abortUpload, completeUploadStorage, uploadMode, uploadSessionResponse } from "./uploads";
 import {
   createShareCookie,
   decryptShareCode,
@@ -401,7 +406,9 @@ api.post("/api/uploads", async (c) => {
   const objectKey = `objects/${crypto.randomUUID()}`;
   // 先创建存储供应商的 multipart 会话，再在同一个请求中原子预留数据库配额。
   // 任一步失败都要主动 abort，避免留下无法被用户看到的孤儿 multipart 会话。
-  const providerUploadId = await c.env.services.blobs.createMultipart(objectKey, parsed.data.mimeType);
+  const providerUploadId = c.env.services.directUploads
+    ? await c.env.services.directUploads.createMultipart(objectKey, parsed.data.mimeType)
+    : await c.env.services.blobs.createMultipart(objectKey, parsed.data.mimeType);
   const now = Date.now();
   let upload;
   try {
@@ -414,20 +421,99 @@ api.post("/api/uploads", async (c) => {
       expiresAt: now + 24 * 60 * 60 * 1000,
     }, c.env.services.quotaBytes);
   } catch (error) {
-    await c.env.services.blobs.abortMultipart(objectKey, providerUploadId).catch(() => undefined);
+    const direct = c.env.services.directUploads?.isManagedUpload(providerUploadId)
+      ? c.env.services.directUploads
+      : null;
+    await (direct
+      ? direct.abortMultipart(objectKey, providerUploadId)
+      : c.env.services.blobs.abortMultipart(objectKey, providerUploadId)).catch(() => undefined);
     throw error;
   }
   if (!upload) {
-    await c.env.services.blobs.abortMultipart(objectKey, providerUploadId).catch(() => undefined);
+    const direct = c.env.services.directUploads?.isManagedUpload(providerUploadId)
+      ? c.env.services.directUploads
+      : null;
+    await (direct
+      ? direct.abortMultipart(objectKey, providerUploadId)
+      : c.env.services.blobs.abortMultipart(objectKey, providerUploadId)).catch(() => undefined);
     return errorResponse(c.get("requestId"), "QUOTA_EXCEEDED", "存储配额不足，请先清理文件", 409);
   }
-  return c.json(upload, 201);
+  return c.json(uploadSessionResponse(c.env.services, upload), 201);
 });
 
 api.get("/api/uploads/:id", async (c) => {
   const upload = await c.env.services.metadata.getUpload(c.get("identity").ownerId, c.req.param("id"));
   if (!upload || !["uploading", "completed"].includes(upload.status)) return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在", 404);
-  return c.json(upload);
+  return c.json(uploadSessionResponse(c.env.services, upload));
+});
+
+api.post("/api/uploads/:id/part-urls", async (c) => {
+  const ownerId = c.get("identity").ownerId;
+  const upload = await c.env.services.metadata.getUpload(ownerId, c.req.param("id"));
+  if (!upload || upload.status !== "uploading") {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在或已结束", 404);
+  }
+  if (upload.expiresAt <= Date.now()) {
+    return errorResponse(c.get("requestId"), "UPLOAD_EXPIRED", "上传任务已过期", 409);
+  }
+  const direct = c.env.services.directUploads;
+  if (!direct?.isManagedUpload(upload.providerUploadId)) {
+    return errorResponse(c.get("requestId"), "DIRECT_UPLOAD_UNAVAILABLE", "当前存储不支持直接上传", 409);
+  }
+  const parsed = uploadPartUrlsSchema.safeParse(await parseJson(c.req.raw));
+  if (!parsed.success || new Set(parsed.data.partNumbers).size !== parsed.data.partNumbers.length) {
+    return errorResponse(c.get("requestId"), "INVALID_PART", "分片编号无效", 400);
+  }
+  const partCount = Math.ceil(upload.sizeBytes / UPLOAD_PART_SIZE);
+  if (parsed.data.partNumbers.some((partNumber) => partNumber > partCount)) {
+    return errorResponse(c.get("requestId"), "INVALID_PART", "分片编号超出文件范围", 400);
+  }
+  const expiresInSeconds = 15 * 60;
+  const expiresAt = Date.now() + expiresInSeconds * 1_000;
+  const urls: UploadPartUrl[] = await Promise.all(parsed.data.partNumbers.map(async (partNumber) => ({
+    partNumber,
+    expiresAt,
+    url: await direct.createPartUploadUrl(
+      upload.objectKey,
+      upload.providerUploadId,
+      partNumber,
+      expiresInSeconds,
+    ),
+  })));
+  return c.json({ urls });
+});
+
+api.post("/api/uploads/:id/parts/confirm", async (c) => {
+  const ownerId = c.get("identity").ownerId;
+  const upload = await c.env.services.metadata.getUpload(ownerId, c.req.param("id"));
+  if (!upload || upload.status !== "uploading") {
+    return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在或已结束", 404);
+  }
+  if (upload.expiresAt <= Date.now()) {
+    return errorResponse(c.get("requestId"), "UPLOAD_EXPIRED", "上传任务已过期", 409);
+  }
+  const direct = c.env.services.directUploads;
+  if (!direct?.isManagedUpload(upload.providerUploadId)) {
+    return errorResponse(c.get("requestId"), "DIRECT_UPLOAD_UNAVAILABLE", "当前存储不支持直接上传", 409);
+  }
+  const parsed = uploadPartsConfirmSchema.safeParse(await parseJson(c.req.raw));
+  if (!parsed.success || new Set(parsed.data.parts.map((part) => part.partNumber)).size !== parsed.data.parts.length) {
+    return errorResponse(c.get("requestId"), "INVALID_PART", "分片确认信息无效", 400);
+  }
+  const partCount = Math.ceil(upload.sizeBytes / UPLOAD_PART_SIZE);
+  if (parsed.data.parts.some((part) => part.partNumber > partCount)) {
+    return errorResponse(c.get("requestId"), "INVALID_PART", "分片编号超出文件范围", 400);
+  }
+  const parts = parsed.data.parts.map(({ partNumber, etag }) => ({
+    partNumber,
+    etag,
+    sizeBytes: partNumber === partCount
+      ? upload.sizeBytes - (partCount - 1) * UPLOAD_PART_SIZE
+      : UPLOAD_PART_SIZE,
+  }));
+  const next = await c.env.services.metadata.saveUploadParts(ownerId, upload.id, parts);
+  if (!next) return errorResponse(c.get("requestId"), "UPLOAD_STATE_ERROR", "无法保存分片状态", 409);
+  return c.json(uploadSessionResponse(c.env.services, next));
 });
 
 api.put("/api/uploads/:id/parts/:partNumber", async (c) => {
@@ -438,6 +524,9 @@ api.put("/api/uploads/:id/parts/:partNumber", async (c) => {
   }
   if (upload.expiresAt <= Date.now()) {
     return errorResponse(c.get("requestId"), "UPLOAD_EXPIRED", "上传任务已过期", 409);
+  }
+  if (uploadMode(c.env.services, upload) === "direct") {
+    return errorResponse(c.get("requestId"), "DIRECT_UPLOAD_REQUIRED", "该上传任务必须直接上传到 R2", 409);
   }
   const partNumber = Number(c.req.param("partNumber"));
   if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
@@ -458,12 +547,13 @@ api.put("/api/uploads/:id/parts/:partNumber", async (c) => {
     bytes,
   );
   // 存储供应商确认分片后才写入 ETag 和大小；重复提交同一编号会覆盖元数据，支持断点续传重试。
-  const next = await c.env.services.metadata.saveUploadPart(ownerId, upload.id, {
+  const next = await c.env.services.metadata.saveUploadParts(ownerId, upload.id, [{
     partNumber,
     etag,
     sizeBytes: bytes.byteLength,
-  });
-  return c.json(next);
+  }]);
+  if (!next) return errorResponse(c.get("requestId"), "UPLOAD_STATE_ERROR", "无法保存分片状态", 409);
+  return c.json(uploadSessionResponse(c.env.services, next));
 });
 
 api.post("/api/uploads/:id/complete", async (c) => {
@@ -485,12 +575,11 @@ api.post("/api/uploads/:id/complete", async (c) => {
   try {
     // 供应商负责把已上传分片合并成对象；部分模拟存储可能已经合并成功但响应丢失，
     // 因此 catch 中会用对象大小做一次幂等兜底检查。
-    await c.env.services.blobs.completeMultipart(
-      upload.objectKey,
-      upload.providerUploadId,
-      upload.parts,
-      upload.mimeType,
-    );
+    await completeUploadStorage(c.env.services, upload);
+    if ((await c.env.services.blobs.size(upload.objectKey)) !== upload.sizeBytes) {
+      await c.env.services.blobs.delete(upload.objectKey).catch(() => undefined);
+      throw new Error("完成后的对象大小与上传声明不一致");
+    }
   } catch (error) {
     if ((await c.env.services.blobs.size(upload.objectKey)) !== upload.sizeBytes) throw error;
   }
@@ -507,7 +596,7 @@ api.delete("/api/uploads/:id", async (c) => {
   }
   const pending = await c.env.services.metadata.beginUploadCleanup(ownerId, upload.id, "cancelled");
   if (!pending) return errorResponse(c.get("requestId"), "NOT_FOUND", "上传任务不存在或已结束", 404);
-  await c.env.services.blobs.abortMultipart(pending.objectKey, pending.providerUploadId);
+  await abortUpload(c.env.services, pending);
   // 只有对象存储 abort 成功后才把数据库状态改为 cancelled；失败时保留 cancelling 供定时清理重试。
   await c.env.services.metadata.finishUploadCleanup(ownerId, pending.id, "cancelled");
   return c.json({ cancelled: true });

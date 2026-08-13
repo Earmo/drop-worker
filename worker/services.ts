@@ -3,6 +3,7 @@ import { createD1MetadataStore, R2BlobStore } from "../apps/api/stores/cloudflar
 import type { Identity, RuntimeServices } from "../apps/api/platform";
 import { validatePublicUrl } from "../apps/api/sharing";
 import { CloudflareEmailAuth } from "./email-auth";
+import { R2DirectUploadService } from "./r2-direct-uploads";
 
 function normalizedEmail(value: string): string {
   return value.trim().toLocaleLowerCase();
@@ -64,9 +65,28 @@ export function createCloudflareServices(env: Env): RuntimeServices {
   const shareSecret = env.AUTH_SESSION_SECRET || (development ? "drop-worker-development-share-secret" : "");
   if (shareSecret.length < 32) throw new Error("AUTH_SESSION_SECRET 至少需要 32 个字符才能启用分享");
   const publicUrl = validatePublicUrl(env.PUBLIC_URL || (development ? "http://localhost:3000" : ""));
+  const r2AccessKeyId = env.R2_ACCESS_KEY_ID?.trim();
+  const r2SecretAccessKey = env.R2_SECRET_ACCESS_KEY?.trim();
+  if (Boolean(r2AccessKeyId) !== Boolean(r2SecretAccessKey)) {
+    throw new Error("R2_ACCESS_KEY_ID 与 R2_SECRET_ACCESS_KEY 必须同时配置");
+  }
+  if ((r2AccessKeyId || r2SecretAccessKey) && (!env.R2_ACCOUNT_ID?.trim() || !env.R2_BUCKET_NAME?.trim())) {
+    throw new Error("启用 R2 直传时必须配置 R2_ACCOUNT_ID 与 R2_BUCKET_NAME");
+  }
+  const hasDirectUploads = Boolean(
+    r2AccessKeyId && r2SecretAccessKey && env.R2_ACCOUNT_ID?.trim() && env.R2_BUCKET_NAME?.trim(),
+  );
   return {
     metadata: createD1MetadataStore(env.DB),
     blobs: new R2BlobStore(env.FILES),
+    directUploads: hasDirectUploads
+      ? new R2DirectUploadService({
+          accountId: env.R2_ACCOUNT_ID.trim(),
+          bucketName: env.R2_BUCKET_NAME.trim(),
+          accessKeyId: r2AccessKeyId!,
+          secretAccessKey: r2SecretAccessKey!,
+        })
+      : undefined,
     quotaBytes: Number.isFinite(quota) && quota > 0 ? quota : 10 * 1024 * 1024 * 1024,
     authMode: emailAuth
       ? "smtp-otp"

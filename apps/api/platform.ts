@@ -20,6 +20,7 @@ export type StoredItem = DropItem & {
 
 // 这两个中间状态代表已领取外部清理租约，但对象存储删除尚未完成。
 export type UploadCleanupStatus = "cancelling" | "expiring";
+export const DIRECT_UPLOAD_ID_PREFIX = "r2-s3:";
 
 export type UploadRecord = Omit<UploadSession, "status"> & {
   status: UploadSession["status"] | UploadCleanupStatus;
@@ -122,7 +123,7 @@ export interface MetadataStore {
     expiresAt: number;
   }, quotaBytes: number): Promise<UploadRecord | null>;
   getUpload(ownerId: string, id: string): Promise<UploadRecord | null>;
-  saveUploadPart(ownerId: string, id: string, part: UploadedPart): Promise<UploadRecord | null>;
+  saveUploadParts(ownerId: string, id: string, parts: UploadedPart[]): Promise<UploadRecord | null>;
   completeUpload(ownerId: string, id: string): Promise<StoredItem | null>;
   beginUploadCleanup(ownerId: string, id: string, finalStatus: "cancelled" | "expired"): Promise<UploadRecord | null>;
   finishUploadCleanup(ownerId: string, id: string, finalStatus: "cancelled" | "expired"): Promise<UploadRecord | null>;
@@ -211,9 +212,29 @@ export interface BlobStore {
   delete(objectKey: string): Promise<void>;
 }
 
+export interface DirectUploadService {
+  isManagedUpload(uploadId: string): boolean;
+  createMultipart(objectKey: string, contentType: string): Promise<string>;
+  createPartUploadUrl(
+    objectKey: string,
+    uploadId: string,
+    partNumber: number,
+    expiresInSeconds: number,
+  ): Promise<string>;
+  putPart(
+    objectKey: string,
+    uploadId: string,
+    partNumber: number,
+    bytes: Uint8Array,
+  ): Promise<string>;
+  completeMultipart(objectKey: string, uploadId: string, parts: UploadedPart[]): Promise<void>;
+  abortMultipart(objectKey: string, uploadId: string): Promise<void>;
+}
+
 export type RuntimeServices = {
   metadata: MetadataStore;
   blobs: BlobStore;
+  directUploads?: DirectUploadService;
   quotaBytes: number;
   resolveIdentity(request: Request): Promise<Identity | null>;
   authMode: "platform" | "password" | "smtp-otp" | "development";

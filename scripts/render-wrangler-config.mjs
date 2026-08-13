@@ -27,6 +27,7 @@ const workerName = requireValue("WORKER_NAME", "drop-worker");
 const databaseName = requireValue("D1_DATABASE_NAME", workerName);
 const databaseId = requireValue("D1_DATABASE_ID");
 const bucketName = requireValue("R2_BUCKET_NAME", `${workerName}-files`);
+const r2AccountId = requireValue("R2_ACCOUNT_ID");
 const ownerEmail = requireValue("OWNER_EMAIL");
 const emailProvider = requireOneOf("AUTH_EMAIL_PROVIDER", ["cloudflare", "smtp"], "cloudflare");
 const authFromEmail = readValue("AUTH_FROM_EMAIL");
@@ -101,6 +102,8 @@ const config = {
     MAX_STORAGE_BYTES: maxStorageBytes,
     PUBLIC_URL: publicUrl,
     SHARING_ENABLED: sharingEnabled,
+    R2_ACCOUNT_ID: r2AccountId,
+    R2_BUCKET_NAME: bucketName,
     OWNER_EMAIL: ownerEmail,
     AUTH_FROM_EMAIL: authFromEmail,
     AUTH_FROM_NAME: authFromName,
@@ -128,7 +131,23 @@ const config = {
 };
 
 await writeFile(outputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+const corsPath = path.join(path.dirname(outputPath), "r2-cors.json");
+await writeFile(corsPath, `${JSON.stringify({
+  rules: [
+    {
+      allowed: {
+        origins: [new URL(publicUrl).origin],
+        methods: ["PUT"],
+        headers: ["content-type"],
+      },
+      exposeHeaders: ["etag"],
+      maxAgeSeconds: 3_600,
+    },
+  ],
+}, null, 2)}\n`, "utf8");
 if (process.env.GITHUB_OUTPUT) {
   await appendFile(process.env.GITHUB_OUTPUT, `email_provider=${emailProvider}\n`, "utf8");
+  await appendFile(process.env.GITHUB_OUTPUT, `r2_bucket_name=${bucketName}\n`, "utf8");
+  await appendFile(process.env.GITHUB_OUTPUT, `r2_cors_config=${corsPath}\n`, "utf8");
 }
 console.log(`已生成 Wrangler 部署配置：${path.basename(outputPath)}`);

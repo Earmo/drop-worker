@@ -23,6 +23,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
+        R2_ACCOUNT_ID: "1234567890abcdef",
         PUBLIC_URL: "https://drop.example.com",
         SHARING_ENABLED: "true",
         OWNER_EMAIL: "owner@example.com",
@@ -42,7 +43,19 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     assert.equal(config.vars.SMTP_PORT, "994");
     assert.equal(config.vars.SMTP_SECURE, "true");
     assert.equal(config.vars.PUBLIC_URL, "https://drop.example.com");
+    assert.equal(config.vars.R2_ACCOUNT_ID, "1234567890abcdef");
+    assert.equal(config.vars.R2_BUCKET_NAME, "drop-worker-files");
     assert.equal(config.send_email, undefined);
+    const cors = JSON.parse(await readFile(join(root, "r2-cors.json"), "utf8"));
+    assert.deepEqual(cors.rules[0], {
+      allowed: {
+        origins: ["https://drop.example.com"],
+        methods: ["PUT"],
+        headers: ["content-type"],
+      },
+      exposeHeaders: ["etag"],
+      maxAgeSeconds: 3600,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -60,6 +73,7 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
+        R2_ACCOUNT_ID: "1234567890abcdef",
         PUBLIC_URL: "https://drop.example.com",
         SHARING_ENABLED: "",
         OWNER_EMAIL: "owner@example.com",
@@ -99,6 +113,9 @@ test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版�
   assert.equal(actionCount, 2, "两种 Worker 部署分支必须使用 Wrangler Action v4");
   assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
   assert.match(workflow, /npx wrangler@4\.118\.0 d1 migrations apply DB --remote --config wrangler\.jsonc/);
+  assert.match(workflow, /r2 bucket cors set "\$R2_BUCKET_NAME" --file/);
+  assert.match(workflow, /R2_ACCESS_KEY_ID/);
+  assert.match(workflow, /R2_SECRET_ACCESS_KEY/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限/);
   assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 2);
 });

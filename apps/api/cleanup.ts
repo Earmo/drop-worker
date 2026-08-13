@@ -1,4 +1,5 @@
 import type { RuntimeServices } from "./platform";
+import { abortUpload } from "./uploads";
 
 export async function runCleanup(services: RuntimeServices, now = Date.now()): Promise<{
   expiredUploads: number;
@@ -15,7 +16,7 @@ export async function runCleanup(services: RuntimeServices, now = Date.now()): P
     const upload = await services.metadata.beginUploadCleanup(candidate.ownerId, candidate.id, finalStatus);
     if (!upload) continue;
     try {
-      await services.blobs.abortMultipart(upload.objectKey, upload.providerUploadId);
+      await abortUpload(services, upload);
       const finished = await services.metadata.finishUploadCleanup(upload.ownerId, upload.id, finalStatus);
       if (finished && finalStatus === "expired") expiredCount += 1;
     } catch (error) {

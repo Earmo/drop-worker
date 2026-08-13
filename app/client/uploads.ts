@@ -1,4 +1,7 @@
-export const PART_SIZE = 8 * 1024 * 1024;
+export {
+  UPLOAD_CONCURRENCY,
+  UPLOAD_PART_SIZE as PART_SIZE,
+} from "../../packages/contracts";
 
 export type UploadTask = {
   id: string;

@@ -19,6 +19,7 @@ import type {
   PublicShareContent,
   StorageSummary,
   UploadSession,
+  UploadSessionResponse,
 } from "../packages/contracts";
 
 async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
@@ -225,6 +226,7 @@ test("分片上传可以恢复、完成并下载原始字节", async () => {
     });
     assert.equal(createResponse.status, 201);
     const session = (await createResponse.json()) as UploadSession;
+    assert.equal((session as UploadSessionResponse).uploadMode, "proxy");
 
     const partResponse = await request(current.services, `/api/uploads/${session.id}/parts/1`, {
       method: "PUT",
@@ -257,6 +259,110 @@ test("分片上传可以恢复、完成并下载原始字节", async () => {
     const storage = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
     assert.equal(storage.usedBytes, bytes.byteLength);
     assert.equal(storage.reservedBytes, 0);
+  } finally {
+    await current.close();
+  }
+});
+
+test("R2 直传分片会批量确认、完成并支持取消", async () => {
+  const current = await fixture(40 * 1024 * 1024);
+  try {
+    const uploaded = new Map<number, Uint8Array>();
+    const aborted: string[] = [];
+    const directUploadId = "r2-s3:test-upload";
+    current.services.directUploads = {
+      isManagedUpload: (uploadId) => uploadId.startsWith("r2-s3:"),
+      createMultipart: async () => directUploadId,
+      createPartUploadUrl: async (_key, _uploadId, partNumber) => `https://r2.example.test/part/${partNumber}`,
+      putPart: async (_key, _uploadId, partNumber, bytes) => {
+        uploaded.set(partNumber, bytes);
+        return `"etag-${partNumber}"`;
+      },
+      completeMultipart: async (objectKey, uploadId, parts) => {
+        assert.equal(uploadId, directUploadId);
+        const localUploadId = await current.services.blobs.createMultipart(objectKey, "application/octet-stream");
+        const localParts = [];
+        for (const part of parts) {
+          const bytes = new Uint8Array(part.sizeBytes).fill(part.partNumber);
+          uploaded.set(part.partNumber, bytes);
+          localParts.push({
+            ...part,
+            etag: await current.services.blobs.putPart(objectKey, localUploadId, part.partNumber, bytes),
+          });
+        }
+        await current.services.blobs.completeMultipart(
+          objectKey,
+          localUploadId,
+          localParts,
+          "application/octet-stream",
+        );
+      },
+      abortMultipart: async (_key, uploadId) => {
+        aborted.push(uploadId);
+      },
+    };
+    const sizeBytes = 16 * 1024 * 1024 + 3;
+    const create = await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "direct.bin",
+        mimeType: "application/octet-stream",
+        sizeBytes,
+        fingerprint: `direct.bin:${sizeBytes}:1`,
+      }),
+    });
+    assert.equal(create.status, 201);
+    const session = (await create.json()) as UploadSessionResponse;
+    assert.equal(session.uploadMode, "direct");
+
+    const urls = await request(current.services, `/api/uploads/${session.id}/part-urls`, {
+      method: "POST",
+      body: JSON.stringify({ partNumbers: [1, 2] }),
+    });
+    assert.equal(urls.status, 200);
+    assert.deepEqual(
+      ((await urls.json()) as { urls: Array<{ partNumber: number }> }).urls.map((value) => value.partNumber),
+      [1, 2],
+    );
+
+    const confirm = await request(current.services, `/api/uploads/${session.id}/parts/confirm`, {
+      method: "POST",
+      body: JSON.stringify({
+        parts: [
+          { partNumber: 1, etag: "\"etag-1\"" },
+          { partNumber: 2, etag: "\"etag-2\"" },
+        ],
+      }),
+    });
+    assert.equal(confirm.status, 200);
+    const confirmed = (await confirm.json()) as UploadSessionResponse;
+    assert.deepEqual(confirmed.parts.map((part) => part.sizeBytes), [16 * 1024 * 1024, 3]);
+
+    const proxy = await request(current.services, `/api/uploads/${session.id}/parts/1`, {
+      method: "PUT",
+      body: new Uint8Array([1]),
+      headers: { "content-length": "1" },
+    });
+    assert.equal(proxy.status, 409);
+
+    const complete = await request(current.services, `/api/uploads/${session.id}/complete`, {
+      method: "POST",
+      body: "{}",
+    });
+    assert.equal(complete.status, 201);
+
+    const second = (await (await request(current.services, "/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: "cancel-direct.bin",
+        mimeType: "application/octet-stream",
+        sizeBytes: 1,
+        fingerprint: "cancel-direct.bin:1:1",
+      }),
+    })).json()) as UploadSessionResponse;
+    const cancel = await request(current.services, `/api/uploads/${second.id}`, { method: "DELETE" });
+    assert.equal(cancel.status, 200);
+    assert.deepEqual(aborted, [directUploadId]);
   } finally {
     await current.close();
   }

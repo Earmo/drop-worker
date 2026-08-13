@@ -5,7 +5,15 @@ import { copyFile, cp, mkdir, readFile, readdir, stat, writeFile } from "node:fs
 import { basename, relative, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import type { DropItem, ExportBundle, ListItemsResponse, UploadSession } from "../packages/contracts";
+import {
+  UPLOAD_CONCURRENCY,
+  UPLOAD_PART_SIZE,
+  type DropItem,
+  type ExportBundle,
+  type ListItemsResponse,
+  type UploadPartUrl,
+  type UploadSessionResponse,
+} from "../packages/contracts";
 import { createPasswordHash } from "./local-auth";
 import { migrateConfiguredDatabase } from "./migrate-database";
 import {
@@ -137,16 +145,48 @@ async function uploadRemoteFile(filePath: string, item: PortableManifest["items"
       fingerprint: `restore:${item.id}:${bytes.byteLength}`,
     }),
   });
-  let upload = (await create.json()) as UploadSession;
-  const partSize = 8 * 1024 * 1024;
-  for (let offset = 0, partNumber = 1; offset < bytes.byteLength; offset += partSize, partNumber += 1) {
-    const part = bytes.slice(offset, Math.min(bytes.byteLength, offset + partSize));
-    const response = await remoteFetch(`/api/uploads/${upload.id}/parts/${partNumber}`, {
-      method: "PUT",
-      body: part,
-      headers: { "content-type": "application/octet-stream", "content-length": String(part.byteLength) },
-    });
-    upload = (await response.json()) as UploadSession;
+  let upload = (await create.json()) as UploadSessionResponse;
+  const partNumbers = Array.from(
+    { length: Math.ceil(bytes.byteLength / UPLOAD_PART_SIZE) },
+    (_, index) => index + 1,
+  );
+  if (upload.uploadMode === "direct") {
+    for (let offset = 0; offset < partNumbers.length; offset += UPLOAD_CONCURRENCY) {
+      const batch = partNumbers.slice(offset, offset + UPLOAD_CONCURRENCY);
+      const urlsResponse = await remoteFetch(`/api/uploads/${upload.id}/part-urls`, {
+        method: "POST",
+        body: JSON.stringify({ partNumbers: batch }),
+      });
+      const { urls } = (await urlsResponse.json()) as { urls: UploadPartUrl[] };
+      const urlByPart = new Map(urls.map((value) => [value.partNumber, value.url]));
+      const parts = await Promise.all(batch.map(async (partNumber) => {
+        const start = (partNumber - 1) * UPLOAD_PART_SIZE;
+        const part = bytes.slice(start, Math.min(bytes.byteLength, start + UPLOAD_PART_SIZE));
+        const url = urlByPart.get(partNumber);
+        if (!url) throw new Error("远程实例未返回完整的分片上传地址");
+        const response = await fetch(url, { method: "PUT", body: part });
+        if (!response.ok) throw new Error(`R2 分片上传失败 (${response.status})`);
+        const etag = response.headers.get("etag");
+        if (!etag) throw new Error("R2 未返回分片 ETag，请检查存储桶 CORS 配置");
+        return { partNumber, etag };
+      }));
+      const confirm = await remoteFetch(`/api/uploads/${upload.id}/parts/confirm`, {
+        method: "POST",
+        body: JSON.stringify({ parts }),
+      });
+      upload = (await confirm.json()) as UploadSessionResponse;
+    }
+  } else {
+    for (const partNumber of partNumbers) {
+      const start = (partNumber - 1) * UPLOAD_PART_SIZE;
+      const part = bytes.slice(start, Math.min(bytes.byteLength, start + UPLOAD_PART_SIZE));
+      const response = await remoteFetch(`/api/uploads/${upload.id}/parts/${partNumber}`, {
+        method: "PUT",
+        body: part,
+        headers: { "content-type": "application/octet-stream", "content-length": String(part.byteLength) },
+      });
+      upload = (await response.json()) as UploadSessionResponse;
+    }
   }
   return (await (await remoteFetch(`/api/uploads/${upload.id}/complete`, { method: "POST", body: "{}" })).json()) as DropItem;
 }

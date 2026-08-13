@@ -36,6 +36,7 @@ yarn-error.log*
 
 # local Cloudflare deployment configuration (use wrangler.example.jsonc as the template)
 /wrangler.jsonc
+/r2-cors.json
 
 # vercel
 .vercel

@@ -589,19 +589,35 @@ export class SqlMetadataStore implements MetadataStore {
     return row ? uploadFromRow(row) : null;
   }
 
-  async saveUploadPart(ownerId: string, id: string, part: UploadedPart): Promise<UploadRecord | null> {
-    const upload = await this.getUpload(ownerId, id);
-    if (!upload || upload.status !== "uploading") return null;
-    const nextParts = [...upload.parts.filter((value) => value.partNumber !== part.partNumber), part].sort(
-      (a, b) => a.partNumber - b.partNumber,
-    );
-    // 先移除相同 partNumber 再排序，使分片重试成为幂等更新，并保证完成时按编号拼接。
-    await this.sql.run(
-      `UPDATE uploads SET parts_json = ?, updated_at = ?
-       WHERE owner_id = ? AND id = ? AND status = 'uploading'`,
-      [JSON.stringify(nextParts), Date.now(), ownerId, id],
-    );
-    return this.getUpload(ownerId, id);
+  async saveUploadParts(ownerId: string, id: string, parts: UploadedPart[]): Promise<UploadRecord | null> {
+    return this.withOperationLock(`upload:${ownerId}:${id}`, () => this.saveUploadPartsUnlocked(ownerId, id, parts));
+  }
+
+  private async saveUploadPartsUnlocked(
+    ownerId: string,
+    id: string,
+    parts: UploadedPart[],
+  ): Promise<UploadRecord | null> {
+    const partNumbers = new Set(parts.map((part) => part.partNumber));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const row = await this.sql.first<UploadRow>(
+        `SELECT ${UPLOAD_COLUMNS} FROM uploads WHERE owner_id = ? AND id = ?`,
+        [ownerId, id],
+      );
+      if (!row || row.status !== "uploading") return null;
+      const upload = uploadFromRow(row);
+      const nextParts = [...upload.parts.filter((value) => !partNumbers.has(value.partNumber)), ...parts].sort(
+        (a, b) => a.partNumber - b.partNumber,
+      );
+      // parts_json 作为版本值参与 WHERE；不同 Worker 实例并发确认时，落后的写入会重读并合并。
+      const result = await this.sql.run(
+        `UPDATE uploads SET parts_json = ?, updated_at = ?
+         WHERE owner_id = ? AND id = ? AND status = 'uploading' AND parts_json = ?`,
+        [JSON.stringify(nextParts), Date.now(), ownerId, id, row.parts_json],
+      );
+      if (result.changes > 0) return this.getUpload(ownerId, id);
+    }
+    throw new Error("并发保存上传分片失败，请重试");
   }
 
   async completeUpload(ownerId: string, id: string): Promise<StoredItem | null> {
