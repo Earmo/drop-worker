@@ -14,13 +14,13 @@ import {
   type UploadPartUrl,
   type UploadSessionResponse,
 } from "../packages/contracts";
-import { createPasswordHash } from "./local-auth";
-import { migrateConfiguredDatabase } from "./migrate-database";
+import { createPasswordHash } from "./auth/local-auth";
+import { migrateConfiguredDatabase } from "./storage/migrate-database";
 import {
   createPortableBackup,
   migratePortableStorage,
   restorePortableBackup,
-} from "./portable-storage";
+} from "./storage/portable-storage";
 
 type PortableManifest = {
   format: "drop-worker-portable-backup";

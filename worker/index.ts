@@ -1,7 +1,7 @@
 import handler from "vinext/server/app-router-entry";
-import { handleApiRequest } from "../apps/api/create-api";
-import { runCleanup } from "../apps/api/cleanup";
-import { createCloudflareServices } from "./services";
+import { handleApiRequest } from "../api/create-api";
+import { runCleanup } from "../api/cleanup";
+import { createCloudflareServices } from "./runtime/services";
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

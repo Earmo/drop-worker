@@ -82,13 +82,14 @@ ALLOW_INSECURE_HTTP=true
 
 ## Docker Compose
 
-准备 `.env` 后运行：
+在仓库根目录准备 `.env`，然后进入部署目录运行：
 
 ```powershell
+cd deploy
 docker compose up -d --build
 ```
 
-默认映射到主机 `3000` 端口。需要更换主机端口时设置 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
+已有镜像且不需要重新构建时，可以直接执行 `docker compose up -d`。默认映射到主机 `3000` 端口；需要更换主机端口时，在执行 Compose 前设置 shell 环境变量 `HOST_PORT`。应用数据存入命名卷 `drop-worker-data`，容器内进程使用非 root 用户运行。
 
 默认 Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
 
@@ -352,12 +353,17 @@ npm test
 
 - `app/`：React/Vinext 页面、布局和主工作区交互。
 - `app/client/`：浏览器 API 客户端、显示格式和断点上传队列持久化。
-- `apps/api/`：与部署平台无关的 Hono 路由、HTTP 中间件和运行时接口。
-- `apps/api/stores/`：D1、SQLite、MySQL、PostgreSQL、R2、本地文件系统与 S3 适配器。
+- `api/`：与部署平台无关的 Hono 路由、HTTP 中间件、能力端口和共享上传传输。
+- `api/stores/`：D1、SQLite、MySQL、PostgreSQL、R2、本地文件系统与 S3 适配器。
 - `packages/contracts/`：前后端共享的 Zod 请求、响应和领域契约。
-- `worker/`：Cloudflare Worker、Email Service、自定义 SMTP 和平台身份适配。
-- `server/`：本地 Node.js 入口、认证、管理和备份迁移命令。
-- `db/` 与 `drizzle/`：SQLite/D1、MySQL 和 PostgreSQL 的方言 Schema 与正式迁移。
+- `worker/`：Cloudflare Worker 入口；`runtime/` 负责配置和组合，`auth/` 负责邮件认证，`storage/` 负责 R2 直传，`types/` 保存环境声明和 Wrangler 生成类型。
+- `server/`：本地 Node.js 与管理命令入口；`runtime/` 负责配置和组合，`auth/` 负责认证，`storage/` 负责数据库迁移和可移植备份。
+- `db/`：SQLite/D1、MySQL 和 PostgreSQL 的方言 Schema。
+- `drizzle/config/`：三种数据库方言的 Drizzle Kit 生成配置。
+- `drizzle/{sqlite,mysql,postgres}/`：按数据库方言归档的正式迁移与 Drizzle 快照。
+- `tools/`：构建期间运行的 Sites/Vite 插件；运行时业务代码不放在构建产物目录。
+
+Node.js 与 Cloudflare 入口各自组装统一的 `AppContext`。API 只依赖元数据、文件对象、上传传输和认证等能力端口；数据库、文件服务、认证方式和直传能力在启动阶段依据部署配置选择，运行期间不会热切换。
 
 ## 数据与安全边界
 

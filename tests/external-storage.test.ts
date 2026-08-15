@@ -3,16 +3,17 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runCleanup } from "../apps/api/cleanup";
-import { handleApiRequest } from "../apps/api/create-api";
-import { keyedDigest, tokenForShare } from "../apps/api/sharing";
-import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
-import { openRelationalMetadataStore } from "../apps/api/stores/relational";
-import { createS3BlobStoreFromEnv } from "../apps/api/stores/s3";
-import type { RuntimeServices } from "../apps/api/platform";
+import { runCleanup } from "../api/cleanup";
+import { createAppContext } from "../api/context";
+import { handleApiRequest } from "../api/create-api";
+import { keyedDigest, tokenForShare } from "../api/sharing";
+import { LocalBlobStore, openLocalMetadataStore } from "../api/stores/local";
+import { openRelationalMetadataStore } from "../api/stores/relational";
+import { createS3BlobStoreFromEnv } from "../api/stores/s3";
+import type { AppContext } from "../api/platform";
 import type { CreateShareResponse, DropItem, PublicShareContent, UploadSession } from "../packages/contracts";
-import { migrateConfiguredDatabase } from "../server/migrate-database";
-import { migratePortableStorage } from "../server/portable-storage";
+import { migrateConfiguredDatabase } from "../server/storage/migrate-database";
+import { migratePortableStorage } from "../server/storage/portable-storage";
 
 const enabled = process.env.RUN_EXTERNAL_STORAGE_TESTS === "true";
 const MIGRATION_CONFIG_KEYS = [
@@ -45,7 +46,7 @@ function preservePrefixedConfiguration(): () => void {
   };
 }
 
-function call(services: RuntimeServices, path: string, init?: RequestInit): Promise<Response> {
+function call(services: AppContext, path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (typeof init?.body === "string" && !headers.has("content-type")) headers.set("content-type", "application/json");
   return handleApiRequest(new Request(`http://localhost${path}`, { ...init, headers }), services);
@@ -137,11 +138,15 @@ test("真实关系型数据库与 S3 完成上传、分享和 Range 下载", { s
   const blobs = createS3BlobStoreFromEnv();
   await metadata.store.ensureSchema();
   await blobs.healthCheck();
-  const services: RuntimeServices = {
+  const services: AppContext = createAppContext({
     metadata: metadata.store,
     blobs,
     quotaBytes: 1024 * 1024,
-    authMode: "development",
+    auth: {
+      mode: "development",
+      resolveIdentity: async () => ({ ownerId: "external-owner", email: "owner@example.com" }),
+      handle: async () => null,
+    },
     insecureHttp: false,
     sharing: {
       enabled: true,
@@ -149,8 +154,7 @@ test("真实关系型数据库与 S3 完成上传、分享和 Range 下载", { s
       secret: PORTABLE_SECRET,
       resolveClientAddress: () => "127.0.0.1",
     },
-    resolveIdentity: async () => ({ ownerId: "external-owner", email: "owner@example.com" }),
-  };
+  });
   try {
     services.quotaBytes = 20;
     const concurrentUploads = await Promise.all([

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createClientAddressResolver, PEER_ADDRESS_HEADER } from "../server/client-address";
+import { createClientAddressResolver, PEER_ADDRESS_HEADER } from "../server/runtime/client-address";
 
 function request(peer: string, forwarded?: string): Request {
   const headers = new Headers({ [PEER_ADDRESS_HEADER]: peer });

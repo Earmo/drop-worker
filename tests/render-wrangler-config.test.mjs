@@ -47,6 +47,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     assert.equal(config.vars.R2_ACCOUNT_ID, "1234567890abcdef");
     assert.equal(config.vars.R2_BUCKET_NAME, "drop-worker-files");
     assert.equal(config.vars.R2_PUBLIC_URL, "https://drop-files.example.com/");
+    assert.equal(config.d1_databases[0].migrations_dir, "./drizzle/sqlite");
     assert.equal(config.send_email, undefined);
     const cors = JSON.parse(await readFile(join(root, "r2-cors.json"), "utf8"));
     assert.deepEqual(cors.rules[0], {

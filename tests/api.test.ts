@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { runCleanup } from "../apps/api/cleanup";
-import { handleApiRequest } from "../apps/api/create-api";
-import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
-import type { RuntimeServices } from "../apps/api/platform";
-import { SqlMetadataStore, type SqlExecutor } from "../apps/api/stores/sql-metadata";
-import { decryptShareCode, encryptShareCode, keyedDigest, tokenForShare } from "../apps/api/sharing";
+import { runCleanup } from "../api/cleanup";
+import { createAppContext } from "../api/context";
+import { handleApiRequest } from "../api/create-api";
+import { createUploadTransport } from "../api/uploads";
+import { LocalBlobStore, openLocalMetadataStore } from "../api/stores/local";
+import type { AppContext } from "../api/platform";
+import { SqlMetadataStore, type SqlExecutor } from "../api/stores/sql-metadata";
+import { decryptShareCode, encryptShareCode, keyedDigest, tokenForShare } from "../api/sharing";
 import { createShareSchema } from "../packages/contracts";
 import type {
   CreateShareResponse,
@@ -23,7 +25,7 @@ import type {
 } from "../packages/contracts";
 
 async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
-  services: RuntimeServices;
+  services: AppContext;
   close(): Promise<void>;
 }> {
   const root = await mkdtemp(join(tmpdir(), "drop-worker-api-"));
@@ -32,11 +34,15 @@ async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
   const blobs = new LocalBlobStore(root);
   await blobs.prepare();
   return {
-    services: {
+    services: createAppContext({
       metadata: metadata.store,
       blobs,
       quotaBytes,
-      authMode: "development",
+      auth: {
+        mode: "development",
+        resolveIdentity: async () => ({ ownerId: "test-owner", email: "owner@example.com" }),
+        handle: async () => null,
+      },
       insecureHttp: false,
       sharing: {
         enabled: true,
@@ -44,8 +50,7 @@ async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
         secret: "test-share-secret-that-is-long-enough",
         resolveClientAddress: () => "127.0.0.1",
       },
-      resolveIdentity: async () => ({ ownerId: "test-owner", email: "owner@example.com" }),
-    },
+    }),
     close: async () => {
       metadata.close();
       await rm(root, { recursive: true, force: true });
@@ -54,7 +59,7 @@ async function fixture(quotaBytes = 10 * 1024 * 1024): Promise<{
 }
 
 function request(
-  services: RuntimeServices,
+  services: AppContext,
   path: string,
   init?: RequestInit,
 ): Promise<Response> {
@@ -144,7 +149,7 @@ test("就绪检查会探测数据库且不泄露失败细节", async () => {
   const current = await fixture();
   try {
     let checked = false;
-    current.services.metadata.healthCheck = async () => {
+    current.services.metadata.lifecycle.healthCheck = async () => {
       checked = true;
       throw new Error("postgresql://user:secret@example.invalid/private");
     };
@@ -270,7 +275,7 @@ test("R2 直传分片会批量确认、完成并支持取消", async () => {
     const uploaded = new Map<number, Uint8Array>();
     const aborted: string[] = [];
     const directUploadId = "r2-s3:test-upload";
-    current.services.directUploads = {
+    current.services.uploads = createUploadTransport(current.services.blobs, {
       isManagedUpload: (uploadId) => uploadId.startsWith("r2-s3:"),
       createMultipart: async () => directUploadId,
       createPartUploadUrl: async (_key, _uploadId, partNumber) => `https://r2.example.test/part/${partNumber}`,
@@ -300,7 +305,7 @@ test("R2 直传分片会批量确认、完成并支持取消", async () => {
       abortMultipart: async (_key, uploadId) => {
         aborted.push(uploadId);
       },
-    };
+    });
     const sizeBytes = 16 * 1024 * 1024 + 3;
     const create = await request(current.services, "/api/uploads", {
       method: "POST",
@@ -435,7 +440,7 @@ test("公开 R2 地址只接管下载且保留图片预览", async () => {
     assert.equal(preview.headers.get("content-type"), "image/png");
 
     const download = await request(current.services, `/api/files/${item.id}?download=1`);
-    const stored = await current.services.metadata.getItem("test-owner", item.id);
+    const stored = await current.services.metadata.items.getItem("test-owner", item.id);
     assert.ok(stored?.objectKey);
     assert.equal(download.status, 307);
     assert.equal(
@@ -521,14 +526,14 @@ test("上传取消失败会保留预留空间并由清理任务重试", async ()
     assert.equal(failedCancel.status, 500);
     const retained = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
     assert.equal(retained.reservedBytes, 4);
-    assert.equal((await current.services.metadata.getUpload("test-owner", upload.id))?.status, "cancelling");
+    assert.equal((await current.services.metadata.uploads.getUpload("test-owner", upload.id))?.status, "cancelling");
 
     current.services.blobs.abortMultipart = abortMultipart;
     const cleanup = await runCleanup(current.services, Date.now());
     assert.equal(cleanup.expiredUploads, 0);
     const released = (await (await request(current.services, "/api/storage")).json()) as StorageSummary;
     assert.equal(released.reservedBytes, 0);
-    assert.equal((await current.services.metadata.getUpload("test-owner", upload.id))?.status, "cancelled");
+    assert.equal((await current.services.metadata.uploads.getUpload("test-owner", upload.id))?.status, "cancelled");
   } finally {
     await current.close();
   }
@@ -538,7 +543,7 @@ test("时间流可以按游标读取超过一页的历史内容", async () => {
   const current = await fixture();
   try {
     for (let index = 0; index < 105; index += 1) {
-      await current.services.metadata.createItem({
+      await current.services.metadata.items.createItem({
         ownerId: "test-owner",
         type: "text",
         content: `分页内容 ${index}`,
@@ -627,7 +632,7 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
     const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
     assert.equal(listed.shares[0]?.shareUrl, new URL(`/s/${token}`, current.services.sharing.publicUrl).toString());
     assert.equal(listed.shares[0]?.code, "0042");
-    const stored = await current.services.metadata.getShareByTokenHash(
+    const stored = await current.services.metadata.shares.getShareByTokenHash(
       await keyedDigest(current.services.sharing.secret, "share-token-hash", token),
     );
     assert.ok(stored?.codeEncrypted);
@@ -691,7 +696,7 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
       "share-source",
       "127.0.0.4",
     );
-    await current.services.metadata.saveShareAttempt({
+    await current.services.metadata.shares.saveShareAttempt({
       shareId: created.share.id,
       sourceHash: expiredWindowSource,
       failures: 4,
@@ -752,7 +757,7 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
 
     const expiredId = crypto.randomUUID();
     const expiredToken = await tokenForShare(current.services.sharing.secret, expiredId);
-    await current.services.metadata.createShare({
+    await current.services.metadata.shares.createShare({
       id: expiredId,
       ownerId: "test-owner",
       itemId: item.id,
@@ -772,7 +777,7 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
       "share-token-hash",
       staleToken,
     );
-    await current.services.metadata.createShare({
+    await current.services.metadata.shares.createShare({
       id: staleId,
       ownerId: "test-owner",
       itemId: item.id,
@@ -782,7 +787,7 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
       now: cleanupNow - 32 * 24 * 60 * 60 * 1000,
       expiresAt: cleanupNow - 31 * 24 * 60 * 60 * 1000,
     });
-    await current.services.metadata.saveShareAttempt({
+    await current.services.metadata.shares.saveShareAttempt({
       shareId: staleId,
       sourceHash: "stale-source-digest",
       failures: 1,
@@ -790,8 +795,8 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
       updatedAt: cleanupNow - 31 * 24 * 60 * 60 * 1000,
     });
     await runCleanup(current.services, cleanupNow);
-    assert.equal(await current.services.metadata.getShareByTokenHash(staleTokenHash), null);
-    assert.equal(await current.services.metadata.getShareAttempt(staleId, "stale-source-digest"), null);
+    assert.equal(await current.services.metadata.shares.getShareByTokenHash(staleTokenHash), null);
+    assert.equal(await current.services.metadata.shares.getShareAttempt(staleId, "stale-source-digest"), null);
   } finally {
     await current.close();
   }

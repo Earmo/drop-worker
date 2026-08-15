@@ -28,7 +28,7 @@
       // 目标 D1 数据库 UUID；部署前替换为自己的 ID。
       "database_id": "<D1_DATABASE_ID>",
       // Drizzle/D1 迁移文件目录。
-      "migrations_dir": "./drizzle"
+      "migrations_dir": "./drizzle/sqlite"
     }
   ],
   // R2 对象存储桶绑定，用于保存上传文件。

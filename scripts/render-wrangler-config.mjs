@@ -88,7 +88,7 @@ const config = {
       binding: "DB",
       database_name: databaseName,
       database_id: databaseId,
-      migrations_dir: "./drizzle",
+      migrations_dir: "./drizzle/sqlite",
     },
   ],
   r2_buckets: [

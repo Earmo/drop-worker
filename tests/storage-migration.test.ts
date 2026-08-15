@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
-import { createPortableBackup, migratePortableStorage, restorePortableBackup } from "../server/portable-storage";
+import { LocalBlobStore, openLocalMetadataStore } from "../api/stores/local";
+import { createPortableBackup, migratePortableStorage, restorePortableBackup } from "../server/storage/portable-storage";
 
 const ENV_KEYS = [
   "SOURCE_DATA_DIR", "SOURCE_DATABASE_DRIVER", "SOURCE_BLOB_DRIVER", "SOURCE_SESSION_SECRET",

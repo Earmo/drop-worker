@@ -4,8 +4,8 @@ import {
   relationalDatabaseUrl,
   relationalPoolSize,
   relationalTlsOptions,
-} from "../apps/api/stores/relational";
-import { createS3BlobStoreFromEnv } from "../apps/api/stores/s3";
+} from "../api/stores/relational";
+import { createS3BlobStoreFromEnv } from "../api/stores/s3";
 
 const ENV_KEYS = [
   "DATABASE_URL",

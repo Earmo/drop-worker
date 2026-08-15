@@ -1,62 +1,27 @@
 import "dotenv/config";
 import { createReadStream } from "node:fs";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
 import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { Hono } from "hono";
-import { handleApiRequest } from "../apps/api/create-api";
-import { runCleanup } from "../apps/api/cleanup";
-import { LocalBlobStore } from "../apps/api/stores/local";
-import { openRelationalMetadataStore } from "../apps/api/stores/relational";
-import { createS3BlobStoreFromEnv, S3BlobStore } from "../apps/api/stores/s3";
-import type { BlobStore } from "../apps/api/platform";
-import { addLocalAuthToServices, LocalAuth, localAuthConfigFromEnv } from "./local-auth";
-import { createClientAddressResolver, PEER_ADDRESS_HEADER } from "./client-address";
+import { handleApiRequest } from "../api/create-api";
+import { runCleanup } from "../api/cleanup";
+import { PEER_ADDRESS_HEADER } from "./runtime/client-address";
+import { loadNodeRuntimeConfig } from "./runtime/config";
+import { closeNodeBlobStore, createNodeRuntime } from "./runtime/create-runtime";
 
 const root = process.cwd();
-// 本地实例把数据库、对象和未完成上传统一放在 DATA_DIR，便于 Docker 卷或手工备份整体迁移。
-const dataRoot = resolve(root, process.env.DATA_DIR || "./data");
-const databasePath = resolve(dataRoot, "drop-worker.sqlite");
+const config = loadNodeRuntimeConfig();
 const distRoot = resolve(root, "dist");
 const clientRoot = resolve(distRoot, "client");
 const serverEntry = resolve(distRoot, "server", "index.js");
 await access(serverEntry).catch(() => {
   throw new Error("缺少生产构建，请先运行 npm run build");
 });
-await mkdir(dataRoot, { recursive: true });
-
-// 启动顺序：打开数据库并建表 -> 准备对象目录 -> 校验认证配置 -> 组装运行时服务。
-const metadata = await openRelationalMetadataStore(databasePath);
-await metadata.store.ensureSchema();
-await metadata.store.ensureApplicationReady();
-const blobDriver = (process.env.BLOB_DRIVER || "local").trim().toLocaleLowerCase();
-let blobs: BlobStore;
-if (blobDriver === "local") blobs = new LocalBlobStore(dataRoot);
-else if (blobDriver === "s3") blobs = createS3BlobStoreFromEnv();
-else throw new Error("BLOB_DRIVER 必须是 local 或 s3");
-await blobs.healthCheck();
-const authConfig = localAuthConfigFromEnv();
-const auth = new LocalAuth(metadata.store, authConfig);
-const resolveClientAddress = createClientAddressResolver(process.env.TRUST_PROXY);
-const quotaBytes = Number(process.env.MAX_STORAGE_BYTES || 10 * 1024 * 1024 * 1024);
-const services = addLocalAuthToServices(
-  {
-    metadata: metadata.store,
-    blobs,
-    quotaBytes: Number.isFinite(quotaBytes) && quotaBytes > 0 ? quotaBytes : 10 * 1024 * 1024 * 1024,
-    sharing: {
-      enabled: process.env.SHARING_ENABLED !== "false",
-      publicUrl: authConfig.publicUrl,
-      secret: authConfig.sessionSecret,
-      resolveClientAddress,
-    },
-  },
-  auth,
-  authConfig,
-);
+const { services, metadata, blobs, auth } = await createNodeRuntime(config);
 
 const builtModule = await import(pathToFileURL(serverEntry).href);
 const builtWorker = builtModule.default as {
@@ -133,9 +98,7 @@ const cleanupTimer = setInterval(() => {
 }, 60 * 60 * 1000);
 cleanupTimer.unref();
 
-const port = Number(process.env.PORT || 3000);
-const hostname = process.env.HOST || "0.0.0.0";
-const server = serve({ fetch: app.fetch, port, hostname }, (info) => {
+const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   console.log(`Drop Worker 已启动：http://${info.address}:${info.port}`);
   if (services.insecureHttp) console.warn("警告：当前以不安全 HTTP 模式运行，请勿暴露到公网。");
 });
@@ -145,7 +108,7 @@ function shutdown(): void {
   clearInterval(cleanupTimer);
   server.close(() => {
     auth.close();
-    if (blobs instanceof S3BlobStore) blobs.close();
+    closeNodeBlobStore(blobs);
     void metadata.close().finally(() => process.exit(0));
   });
 }

@@ -3,24 +3,29 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { handleApiRequest } from "../apps/api/create-api";
-import type { RuntimeServices } from "../apps/api/platform";
-import { LocalBlobStore, openLocalMetadataStore } from "../apps/api/stores/local";
+import { createAppContext } from "../api/context";
+import { handleApiRequest } from "../api/create-api";
+import type { AppContext } from "../api/platform";
+import { LocalBlobStore, openLocalMetadataStore } from "../api/stores/local";
 import type { ListItemsResponse, UploadSession } from "../packages/contracts";
 import { remoteBackup, remoteRestore } from "../server/admin";
 
-async function servicesAt(root: string): Promise<{ services: RuntimeServices; close(): void }> {
+async function servicesAt(root: string): Promise<{ services: AppContext; close(): void }> {
   await mkdir(root, { recursive: true });
   const metadata = openLocalMetadataStore(join(root, "db.sqlite"));
   await metadata.store.ensureSchema();
   const blobs = new LocalBlobStore(root);
   await blobs.prepare();
   return {
-    services: {
+    services: createAppContext({
       metadata: metadata.store,
       blobs,
       quotaBytes: 10 * 1024 * 1024,
-      authMode: "development",
+      auth: {
+        mode: "development",
+        resolveIdentity: async () => ({ ownerId: "portable-owner", email: "owner@example.com" }),
+        handle: async () => null,
+      },
       insecureHttp: false,
       sharing: {
         enabled: true,
@@ -28,13 +33,12 @@ async function servicesAt(root: string): Promise<{ services: RuntimeServices; cl
         secret: "test-share-secret-that-is-long-enough",
         resolveClientAddress: () => "127.0.0.1",
       },
-      resolveIdentity: async () => ({ ownerId: "portable-owner", email: "owner@example.com" }),
-    },
+    }),
     close: metadata.close,
   };
 }
 
-async function call(services: RuntimeServices, path: string, init?: RequestInit): Promise<Response> {
+async function call(services: AppContext, path: string, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers);
   if (typeof init?.body === "string" && !headers.has("content-type")) headers.set("content-type", "application/json");
   return handleApiRequest(new Request(`http://drop-worker.test${path}`, { ...init, headers }), services);

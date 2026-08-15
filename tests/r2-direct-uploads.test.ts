@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { R2DirectUploadService } from "../worker/r2-direct-uploads";
+import { R2DirectUploadService } from "../worker/storage/r2-direct-uploads";
 
 test("R2 直传服务签发 multipart 分片 URL 并完成同一 S3 会话", async () => {
   const originalFetch = globalThis.fetch;

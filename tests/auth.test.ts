@@ -3,11 +3,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { openLocalMetadataStore } from "../apps/api/stores/local";
-import { validatePublicUrl } from "../apps/api/sharing";
-import { createPasswordHash, LocalAuth } from "../server/local-auth";
-import { CloudflareEmailAuth } from "../worker/email-auth";
-import { createCloudflareServices } from "../worker/services";
+import { openLocalMetadataStore } from "../api/stores/local";
+import { validatePublicUrl } from "../api/sharing";
+import { createPasswordHash, LocalAuth } from "../server/auth/local-auth";
+import { CloudflareEmailAuth } from "../worker/auth/email-auth";
+import { createCloudflareServices } from "../worker/runtime/services";
 
 test("本地密码登录创建 30 天会话并支持退出", async () => {
   const root = await mkdtemp(join(tmpdir(), "drop-worker-auth-"));
@@ -110,14 +110,14 @@ test("公开 Sites 仍只把配置邮箱识别为工作区所有者", async () =
     ...baseEnv,
     OWNER_EMAIL: "owner@example.com",
   } as unknown as Env);
-  const owner = await services.resolveIdentity(new Request("https://drop.example.com/api/items", {
+  const owner = await services.auth.resolveIdentity(new Request("https://drop.example.com/api/items", {
     headers: {
       "oai-authenticated-user-id": "owner-id",
       "oai-authenticated-user-email": "Owner@Example.com",
     },
   }));
   assert.equal(owner?.ownerId, "sites:owner-id");
-  const visitor = await services.resolveIdentity(new Request("https://drop.example.com/api/items", {
+  const visitor = await services.auth.resolveIdentity(new Request("https://drop.example.com/api/items", {
     headers: {
       "oai-authenticated-user-id": "visitor-id",
       "oai-authenticated-user-email": "visitor@example.com",
