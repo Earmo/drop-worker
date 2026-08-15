@@ -78,15 +78,10 @@ function safeManifestPath(root: string, path: string): string {
 }
 
 function remoteHeaders(json = false): Headers {
-  // 远程迁移只从环境变量读取认证信息，并统一附加到每个 API 请求，不把凭据写入备份清单。
+  // 远程迁移只从环境变量读取 Cookie，并统一附加到每个 API 请求，不把凭据写入备份清单。
   const headers = new Headers();
   if (json) headers.set("content-type", "application/json");
   if (process.env.DROP_WORKER_COOKIE) headers.set("cookie", process.env.DROP_WORKER_COOKIE);
-  if (process.env.CF_ACCESS_CLIENT_ID) headers.set("cf-access-client-id", process.env.CF_ACCESS_CLIENT_ID);
-  if (process.env.CF_ACCESS_CLIENT_SECRET) headers.set("cf-access-client-secret", process.env.CF_ACCESS_CLIENT_SECRET);
-  if (process.env.OAI_SITES_AUTHORIZATION) {
-    headers.set("oai-sites-authorization", `Bearer ${process.env.OAI_SITES_AUTHORIZATION}`);
-  }
   return headers;
 }
 

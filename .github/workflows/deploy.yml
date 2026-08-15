@@ -66,23 +66,18 @@ jobs:
           R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
           R2_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
-          AUTH_EMAIL_PROVIDER: ${{ vars.AUTH_EMAIL_PROVIDER }}
           MAX_STORAGE_BYTES: ${{ vars.MAX_STORAGE_BYTES }}
           PUBLIC_URL: ${{ vars.PUBLIC_URL }}
           SHARING_ENABLED: ${{ vars.SHARING_ENABLED }}
           OWNER_EMAIL: ${{ secrets.OWNER_EMAIL }}
-          AUTH_FROM_EMAIL: ${{ secrets.AUTH_FROM_EMAIL }}
           AUTH_FROM_NAME: ${{ vars.AUTH_FROM_NAME }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ vars.SMTP_PORT }}
           SMTP_SECURE: ${{ vars.SMTP_SECURE }}
           SMTP_FROM: ${{ secrets.SMTP_FROM }}
           SMTP_TIMEOUT_MS: ${{ vars.SMTP_TIMEOUT_MS }}
-          CF_ACCESS_TEAM_DOMAIN: ${{ vars.CF_ACCESS_TEAM_DOMAIN }}
-          CF_ACCESS_AUD: ${{ vars.CF_ACCESS_AUD }}
       - name: 检查 Worker Secret
         env:
-          EMAIL_PROVIDER: ${{ steps.wrangler-config.outputs.email_provider }}
           AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
@@ -93,8 +88,8 @@ jobs:
             echo "::error::AUTH_SESSION_SECRET 必须至少包含 32 个字符。"
             exit 1
           fi
-          if [ "$EMAIL_PROVIDER" = "smtp" ] && { [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ]; }; then
-            echo "::error::SMTP 模式必须配置 SMTP_USERNAME 和 SMTP_PASSWORD。"
+          if [ -z "$SMTP_USERNAME" ] || [ -z "$SMTP_PASSWORD" ]; then
+            echo "::error::SMTP_USERNAME 和 SMTP_PASSWORD 必须配置。"
             exit 1
           fi
           if [ -z "$R2_ACCESS_KEY_ID" ] || [ -z "$R2_SECRET_ACCESS_KEY" ]; then
@@ -119,24 +114,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           R2_BUCKET_NAME: ${{ steps.wrangler-config.outputs.r2_bucket_name }}
         run: npx wrangler@4.118.0 r2 bucket cors set "$R2_BUCKET_NAME" --file "${{ steps.wrangler-config.outputs.r2_cors_config }}" --force
-      - name: 部署 Worker（Cloudflare Email Service）
-        if: steps.wrangler-config.outputs.email_provider != 'smtp'
-        uses: cloudflare/wrangler-action@v4
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: "4.118.0"
-          command: deploy --config wrangler.jsonc --keep-vars
-          secrets: |
-            AUTH_SESSION_SECRET
-            R2_ACCESS_KEY_ID
-            R2_SECRET_ACCESS_KEY
-        env:
-          AUTH_SESSION_SECRET: ${{ secrets.AUTH_SESSION_SECRET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       - name: 部署 Worker（自定义 SMTP）
-        if: steps.wrangler-config.outputs.email_provider == 'smtp'
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}

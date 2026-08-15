@@ -1,5 +1,6 @@
 import { bigint, index, integer, pgTable, primaryKey, text, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
+// Drizzle schema builder 尚不承载数据库 COMMENT 元数据；原生注释由基线迁移维护。
 const epoch = (name: string) => bigint(name, { mode: "number" });
 
 export const items = pgTable("items", {

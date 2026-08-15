@@ -127,7 +127,7 @@ export function DropApp() {
     } catch {
       const status: AuthStatus = {
         authenticated: false,
-        mode: "platform",
+        mode: "smtp-otp",
         email: null,
         insecureHttp: false,
       };
@@ -757,7 +757,7 @@ function Sidebar({
               <Moon size={15} />
             </button>
           </div>
-          {auth.mode !== "platform" && (
+          {(auth.mode === "password" || auth.mode === "smtp-otp") && (
             <button className="sidebar-action" onClick={onLogout}><LogOut size={16} /> 退出登录</button>
           )}
         </div>
@@ -1341,7 +1341,7 @@ function LoginScreen({ auth, onAuthenticated }: { auth: AuthStatus | null; onAut
         <div className="login-heading"><h1>登录你的投递箱</h1><p>仅允许已配置的个人身份访问。</p></div>
         {!auth ? (
           <div className="login-loading"><LoaderCircle className="spin" size={20} /> 正在检查访问状态</div>
-        ) : auth.mode === "platform" ? (
+        ) : auth.mode === "development" ? (
           <button className="primary-login" onClick={() => window.location.reload()}><RotateCcw size={17} /> 重新验证身份</button>
         ) : (
           <form

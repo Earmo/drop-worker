@@ -1,6 +1,7 @@
 interface Env {
   AUTH_SESSION_SECRET: string;
-  AUTH_EMAIL_PROVIDER: string;
+  OWNER_EMAIL: string;
+  AUTH_FROM_NAME: string;
   SMTP_HOST: string;
   SMTP_PORT: string;
   SMTP_SECURE: string;
@@ -20,7 +21,8 @@ interface Env {
 declare namespace Cloudflare {
   interface Env {
     AUTH_SESSION_SECRET: string;
-    AUTH_EMAIL_PROVIDER: string;
+    OWNER_EMAIL: string;
+    AUTH_FROM_NAME: string;
     SMTP_HOST: string;
     SMTP_PORT: string;
     SMTP_SECURE: string;

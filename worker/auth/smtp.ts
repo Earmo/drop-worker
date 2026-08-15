@@ -1,3 +1,5 @@
+import type { MailMessage, MailSender } from "../../api/platform";
+
 type SmtpConfig = {
   host: string;
   port: number;
@@ -35,6 +37,46 @@ function base64(value: string): string {
   let binary = "";
   for (const byte of encoder.encode(value)) binary += String.fromCharCode(byte);
   return btoa(binary);
+}
+
+function headerSafe(value: string): string {
+  return value.replace(/[\r\n"]/g, "").trim() || "Drop Worker";
+}
+
+function smtpMime(message: MailMessage): string {
+  // Worker 端没有 Nodemailer，适配器只负责把共享邮件模型编码为标准 MIME。
+  const from = message.from.address.replace(/[\r\n<>]/g, "");
+  const to = message.to.replace(/[\r\n<>]/g, "");
+  const boundary = `drop-worker-${crypto.randomUUID()}`;
+  const lines = [
+    `From: ${headerSafe(message.from.name || "Drop Worker")} <${from}>`,
+    `To: ${to}`,
+    `Subject: =?UTF-8?B?${base64(message.subject)}?=`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: <${crypto.randomUUID()}@${from.split("@")[1] || "localhost"}>`,
+    "MIME-Version: 1.0",
+  ];
+  if (!message.html) {
+    lines.push("Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", base64(message.text), "");
+    return lines.join("\r\n");
+  }
+  lines.push(
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64(message.text),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64(message.html),
+    `--${boundary}--`,
+    "",
+  );
+  return lines.join("\r\n");
 }
 
 function supports(lines: string[], capability: string): boolean {
@@ -127,7 +169,7 @@ function expect(response: SmtpResponse, codes: number[], context: string): void 
   throw new Error(`${context}失败（SMTP ${response.code}）`);
 }
 
-export async function sendSmtpMessage(config: SmtpConfig, message: SmtpMessage): Promise<void> {
+async function sendSmtpMessage(config: SmtpConfig, message: SmtpMessage): Promise<void> {
   // Workers Socket 不允许连接 25 端口；支持 465/994 隐式 TLS 或 587 明文后升级 STARTTLS。
   if (config.port === 25) throw new Error("Cloudflare Workers 禁止连接 SMTP 25 端口，请使用 465、587 或 994");
   const { connect } = await import("cloudflare:sockets");
@@ -179,5 +221,18 @@ export async function sendSmtpMessage(config: SmtpConfig, message: SmtpMessage):
   } finally {
     // 无论握手、认证还是投递哪一步失败，都关闭 reader/writer 和 socket。
     await session.close();
+  }
+}
+
+/** Cloudflare Worker 的 SMTP 传输适配器；业务认证流程只依赖 MailSender。 */
+export class WorkerSmtpMailSender implements MailSender {
+  constructor(private readonly config: SmtpConfig) {}
+
+  async send(message: MailMessage): Promise<void> {
+    await sendSmtpMessage(this.config, {
+      from: message.from.address,
+      to: message.to,
+      raw: smtpMime(message),
+    });
   }
 }

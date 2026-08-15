@@ -141,7 +141,7 @@ export type StorageSummary = z.infer<typeof storageSummarySchema>;
 
 export const authStatusSchema = z.object({
   authenticated: z.boolean(),
-  mode: z.enum(["platform", "password", "smtp-otp", "development"]),
+  mode: z.enum(["password", "smtp-otp", "development"]),
   email: z.string().email().nullable(),
   insecureHttp: z.boolean(),
 });

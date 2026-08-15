@@ -3,4 +3,5 @@
  * 运行时适配器仍放在 server/auth 与 worker/auth，避免把平台差异泄漏进路由。
  */
 export * from "./shared";
+export { EmailOtpAuth, type EmailOtpAuthConfig } from "./email-otp";
 export { registerAuthRoutes } from "./routes";

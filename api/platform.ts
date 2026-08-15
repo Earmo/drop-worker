@@ -161,9 +161,11 @@ export interface MetadataStore {
   }): Promise<void>;
   deleteAuthSession(tokenHash: string): Promise<void>;
   createAuthChallenge(input: AuthChallengeRecord): Promise<void>;
+  replaceAuthChallenge(input: AuthChallengeRecord): Promise<void>;
+  getLatestAuthChallenge(email: string): Promise<AuthChallengeRecord | null>;
   getAuthChallenge(id: string, email: string): Promise<AuthChallengeRecord | null>;
-  incrementAuthChallengeAttempts(id: string): Promise<void>;
-  deleteAuthChallenge(id: string): Promise<void>;
+  incrementAuthChallengeAttempts(id: string, maxAttempts?: number): Promise<boolean>;
+  deleteAuthChallenge(id: string): Promise<boolean>;
   isPortableTargetEmpty(): Promise<boolean>;
   listPortableItems(): Promise<StoredItem[]>;
   listPortableShares(): Promise<StoredShare[]>;
@@ -226,6 +228,8 @@ export type AuthSessionStore = Pick<
   | "createAuthSession"
   | "deleteAuthSession"
   | "createAuthChallenge"
+  | "replaceAuthChallenge"
+  | "getLatestAuthChallenge"
   | "getAuthChallenge"
   | "incrementAuthChallengeAttempts"
   | "deleteAuthChallenge"
@@ -323,7 +327,7 @@ export interface DirectUploadService {
   abortMultipart(objectKey: string, uploadId: string): Promise<void>;
 }
 
-export type AuthMode = "platform" | "password" | "smtp-otp" | "development";
+export type AuthMode = "password" | "smtp-otp" | "development";
 
 /**
  * 认证模块的最高 seam。路由只关心可信身份和认证请求响应，不感知 Cookie、挑战或平台凭据。
@@ -335,14 +339,22 @@ export interface AuthProvider {
   close?(): Promise<void> | void;
 }
 
+/** 运行时无关的邮件地址，适配器负责转换为供应商所需格式。 */
+export type MailAddress = {
+  address: string;
+  name?: string;
+};
+
+/** 认证领域发送的邮件内容；传输适配器负责 MIME 编码和 SMTP 投递。 */
 export type MailMessage = {
-  from: string;
+  from: MailAddress;
   to: string;
   subject: string;
   text: string;
+  html?: string;
 };
 
-/** 邮件供应商 seam；认证流程不直接依赖 Nodemailer 或 Cloudflare Email API。 */
+/** 邮件传输 seam；认证流程不直接依赖 Nodemailer 或 Workers Socket API。 */
 export interface MailSender {
   send(message: MailMessage): Promise<void>;
   close?(): Promise<void> | void;

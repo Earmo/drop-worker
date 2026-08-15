@@ -2,7 +2,19 @@ import { normalizeEmail } from "../../api/auth";
 import { DEFAULT_QUOTA_BYTES, positiveInteger } from "../../api/runtime-config";
 import { validatePublicUrl } from "../../api/sharing";
 
-export type CloudflareAuthMode = "platform" | "smtp-otp" | "development";
+export type CloudflareAuthMode = "smtp-otp" | "development";
+
+/** Worker Socket SMTP 适配器所需的完整连接与发件配置。 */
+export type CloudflareSmtpConfig = {
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password: string;
+  from: string;
+  fromName: string;
+  timeoutMs: number;
+};
 
 export type CloudflareDirectUploadConfig = {
   accountId: string;
@@ -20,12 +32,13 @@ export type CloudflareRuntimeConfig = {
   publicFilesUrl?: URL;
   sharingEnabled: boolean;
   directUpload?: CloudflareDirectUploadConfig;
+  smtp?: CloudflareSmtpConfig;
 };
 
 function authMode(value: string | undefined): CloudflareAuthMode {
-  const mode = (value || "platform").trim().toLocaleLowerCase();
-  if (mode === "platform" || mode === "smtp-otp" || mode === "development") return mode;
-  throw new Error("AUTH_MODE 必须是 platform、smtp-otp 或 development");
+  const mode = (value || "smtp-otp").trim().toLocaleLowerCase();
+  if (mode === "smtp-otp" || mode === "development") return mode;
+  throw new Error("AUTH_MODE 必须是 smtp-otp 或 development");
 }
 
 /**
@@ -35,6 +48,31 @@ export function loadCloudflareRuntimeConfig(env: Env): CloudflareRuntimeConfig {
   const mode = authMode(env.AUTH_MODE);
   const ownerEmail = env.OWNER_EMAIL?.trim() ? normalizeEmail(env.OWNER_EMAIL) : undefined;
   if (mode !== "development" && !ownerEmail) throw new Error("生产环境必须配置 OWNER_EMAIL");
+
+  const smtpPort = Number(env.SMTP_PORT || 587);
+  const smtp = mode === "smtp-otp"
+    ? {
+        host: (env.SMTP_HOST || "").trim(),
+        port: smtpPort,
+        secure: env.SMTP_SECURE === "true" || smtpPort === 465 || smtpPort === 994,
+        username: env.SMTP_USERNAME || "",
+        password: env.SMTP_PASSWORD || "",
+        from: normalizeEmail(env.SMTP_FROM || ""),
+        fromName: (env.AUTH_FROM_NAME || "Drop Worker").replace(/[\r\n"]/g, "").trim() || "Drop Worker",
+        timeoutMs: Math.min(Math.max(Number(env.SMTP_TIMEOUT_MS || 15_000), 3_000), 30_000),
+      }
+    : undefined;
+  if (mode === "smtp-otp") {
+    if (!smtp?.host || ![465, 587, 994].includes(smtp.port) || !smtp.from) {
+      throw new Error("邮箱验证码认证配置不完整：SMTP_HOST、SMTP_FROM 和 SMTP_PORT 必须有效");
+    }
+    if (Boolean(smtp.username) !== Boolean(smtp.password)) {
+      throw new Error("SMTP_USERNAME 与 SMTP_PASSWORD 必须同时配置");
+    }
+    if (!Number.isInteger(smtp.timeoutMs) || smtp.timeoutMs < 3_000 || smtp.timeoutMs > 30_000) {
+      throw new Error("SMTP_TIMEOUT_MS 必须是 3000 到 30000 之间的整数");
+    }
+  }
 
   const authSessionSecret = (env.AUTH_SESSION_SECRET || "").trim()
     || (mode === "development" ? "drop-worker-development-share-secret" : "");
@@ -69,5 +107,6 @@ export function loadCloudflareRuntimeConfig(env: Env): CloudflareRuntimeConfig {
     directUpload: accessKeyId && secretAccessKey && accountId && bucketName
       ? { accountId, bucketName, accessKeyId, secretAccessKey }
       : undefined,
+    smtp,
   };
 }

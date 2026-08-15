@@ -47,10 +47,6 @@ yarn-error.log*
 /work/
 /data/
 /backups/
-/.sites-dev.log
-/.sites-dev.err.log
 *.tsbuildinfo
 /.scratch/
 /.openai/
-!/.openai/
-!/.openai/hosting.json

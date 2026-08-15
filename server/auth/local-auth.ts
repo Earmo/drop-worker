@@ -1,7 +1,6 @@
 import {
   createHash,
   randomBytes,
-  randomInt,
   scryptSync,
   timingSafeEqual,
 } from "node:crypto";
@@ -9,15 +8,13 @@ import type { AuthProvider, AuthSessionStore, Identity, MailSender } from "../..
 import {
   AUTH_SESSION_COOKIE,
   AUTH_SESSION_SECONDS,
-  AUTH_CHALLENGE_SECONDS,
-  AUTH_MAX_ATTEMPTS,
-  AUTH_OTP_SUBJECT,
+  EmailOtpAuth,
   authError,
-  authOtpText,
   createSessionCookie,
   normalizeEmail,
   parseAuthJson,
   readCookie,
+  type EmailOtpAuthConfig,
 } from "../../api/auth";
 import { isLoopbackPublicUrl, validatePublicUrl } from "../../api/sharing";
 
@@ -35,6 +32,7 @@ export type LocalAuthConfig = {
     user?: string;
     password?: string;
     from: string;
+    fromName?: string;
   };
 };
 
@@ -66,25 +64,37 @@ function verifyPassword(password: string, stored: string): boolean {
 
 export class LocalAuth implements AuthProvider {
   private readonly ownerId: string;
+  private readonly emailOtp?: EmailOtpAuth;
   readonly mode: "password" | "smtp-otp";
 
   constructor(
     private readonly metadata: AuthSessionStore,
     private readonly config: LocalAuthConfig,
-    private readonly mailer?: MailSender,
+    mailer?: MailSender,
   ) {
     this.ownerId = `local:${sha256(normalizeEmail(config.email)).slice(0, 24)}`;
     this.mode = config.mode;
     if (config.mode === "smtp-otp" && !mailer) {
       throw new Error("SMTP OTP 认证缺少邮件发送适配器");
     }
+    if (config.mode === "smtp-otp" && config.smtp && mailer) {
+      const emailOtpConfig: EmailOtpAuthConfig = {
+        email: config.email,
+        from: { address: config.smtp.from, name: config.smtp.fromName || "Drop Worker" },
+        sessionSecret: config.sessionSecret,
+        secureCookie: config.publicUrl.protocol === "https:",
+        ownerIdPrefix: "local",
+      };
+      this.emailOtp = new EmailOtpAuth(metadata, emailOtpConfig, mailer);
+    }
   }
 
   close(): void {
-    void this.mailer?.close?.();
+    if (this.emailOtp) this.emailOtp.close();
   }
 
   async resolveIdentity(request: Request): Promise<Identity | null> {
+    if (this.emailOtp) return this.emailOtp.resolveIdentity(request);
     // Cookie 只作为索引，数据库校验哈希和过期时间后才返回 owner 身份。
     const token = readCookie(request, AUTH_SESSION_COOKIE);
     if (!token) return null;
@@ -94,16 +104,23 @@ export class LocalAuth implements AuthProvider {
   }
 
   async handle(request: Request): Promise<Response | null> {
+    if (this.emailOtp) {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/auth/login" && request.method === "POST") {
+        return authError("AUTH_MODE_MISMATCH", "当前未启用密码登录");
+      }
+      return this.emailOtp.handle(request);
+    }
     // 本地同时支持密码和邮箱验证码，但每个实例仍只启用配置中的一种 mode。
     const url = new URL(request.url);
     if (url.pathname === "/api/auth/login" && request.method === "POST") {
       return this.loginWithPassword(request);
     }
     if (url.pathname === "/api/auth/request-otp" && request.method === "POST") {
-      return this.requestOtp(request);
+      return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
     }
     if (url.pathname === "/api/auth/verify-otp" && request.method === "POST") {
-      return this.verifyOtp(request);
+      return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
     }
     if (url.pathname === "/api/auth/logout" && request.method === "POST") {
       return this.logout(request);
@@ -125,66 +142,6 @@ export class LocalAuth implements AuthProvider {
     if (!emailMatches || !passwordMatches) {
       return authError("INVALID_CREDENTIALS", "邮箱或密码错误", 401);
     }
-    return this.createSession();
-  }
-
-  private async requestOtp(request: Request): Promise<Response> {
-    // OTP 流程：校验唯一邮箱 -> 写入带过期时间的挑战 -> 通过本地 SMTP 发送验证码。
-    if (this.config.mode !== "smtp-otp" || !this.config.smtp) {
-      return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
-    }
-    const body = await parseAuthJson(request);
-    if (typeof body?.email !== "string" || normalizeEmail(body.email) !== normalizeEmail(this.config.email)) {
-      return authError("INVALID_EMAIL", "该邮箱无权访问", 401);
-    }
-    const challengeId = crypto.randomUUID();
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const now = Date.now();
-    const codeHash = sha256(`${challengeId}:${code}:${this.config.sessionSecret}`);
-    await this.metadata.createAuthChallenge({
-      id: challengeId,
-      email: normalizeEmail(body.email),
-      codeHash,
-      attempts: 0,
-      createdAt: now,
-      expiresAt: now + AUTH_CHALLENGE_SECONDS * 1000,
-    });
-
-    await this.mailer!.send({
-      from: this.config.smtp.from,
-      to: this.config.email,
-      subject: AUTH_OTP_SUBJECT,
-      text: authOtpText(code),
-    });
-    return Response.json({ challengeId, expiresInSeconds: AUTH_CHALLENGE_SECONDS });
-  }
-
-  private async verifyOtp(request: Request): Promise<Response> {
-    // 验证码最多尝试 5 次且 10 分钟过期；每次比对前先递增次数，防止并发重试绕过限制。
-    if (this.config.mode !== "smtp-otp") {
-      return authError("AUTH_MODE_MISMATCH", "当前未启用邮件验证码登录");
-    }
-    const body = await parseAuthJson(request);
-    if (
-      typeof body?.email !== "string" ||
-      typeof body?.challengeId !== "string" ||
-      typeof body?.code !== "string" ||
-      normalizeEmail(body.email) !== normalizeEmail(this.config.email)
-    ) {
-      return authError("INVALID_CODE", "验证码无效", 401);
-    }
-    const row = await this.metadata.getAuthChallenge(body.challengeId, normalizeEmail(body.email));
-    if (!row || row.expiresAt <= Date.now() || row.attempts >= AUTH_MAX_ATTEMPTS) {
-      return authError("INVALID_CODE", "验证码无效或已过期", 401);
-    }
-    await this.metadata.incrementAuthChallengeAttempts(row.id);
-    const provided = Buffer.from(sha256(`${row.id}:${body.code}:${this.config.sessionSecret}`), "hex");
-    const expected = Buffer.from(row.codeHash, "hex");
-    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
-      return authError("INVALID_CODE", "验证码无效或已过期", 401);
-    }
-    await this.metadata.deleteAuthChallenge(row.id);
-    // 通过后删除挑战并签发 30 天会话，后续请求只需验证 Cookie，不必重复发信。
     return this.createSession();
   }
 
@@ -248,18 +205,20 @@ export function localAuthConfigFromEnv(): LocalAuthConfig {
   if (mode === "password" && !process.env.ADMIN_PASSWORD_HASH) {
     throw new Error("密码模式缺少 ADMIN_PASSWORD_HASH，可运行 npm run admin -- hash-password 生成");
   }
+  const smtpPort = Number(process.env.SMTP_PORT || 587);
   const smtp =
     mode === "smtp-otp"
       ? {
           host: process.env.SMTP_HOST || "",
-          port: Number(process.env.SMTP_PORT || 587),
-          secure: process.env.SMTP_SECURE === "true",
-          user: process.env.SMTP_USER,
+          port: smtpPort,
+          secure: process.env.SMTP_SECURE === "true" || smtpPort === 465 || smtpPort === 994,
+          user: process.env.SMTP_USERNAME || process.env.SMTP_USER,
           password: process.env.SMTP_PASSWORD,
           from: process.env.SMTP_FROM || "drop-worker@localhost",
+          fromName: process.env.AUTH_FROM_NAME || "Drop Worker",
         }
       : undefined;
-  if (mode === "smtp-otp" && !smtp?.host) throw new Error("邮件验证码模式缺少 SMTP_HOST");
+  if (mode === "smtp-otp" && (!smtp?.host || !smtp.from)) throw new Error("邮件验证码模式缺少 SMTP_HOST 或 SMTP_FROM");
   return {
     mode,
     email,

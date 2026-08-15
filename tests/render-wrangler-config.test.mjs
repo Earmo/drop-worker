@@ -28,8 +28,6 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
         PUBLIC_URL: "https://drop.example.com",
         SHARING_ENABLED: "true",
         OWNER_EMAIL: "owner@example.com",
-        AUTH_EMAIL_PROVIDER: "smtp",
-        AUTH_FROM_EMAIL: "",
         AUTH_FROM_NAME: "Drop Worker",
         SMTP_HOST: "smtphz.qiye.163.com",
         SMTP_PORT: "994",
@@ -80,8 +78,6 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
         PUBLIC_URL: "https://drop.example.com",
         SHARING_ENABLED: "",
         OWNER_EMAIL: "owner@example.com",
-        AUTH_EMAIL_PROVIDER: "smtp",
-        AUTH_FROM_EMAIL: "",
         AUTH_FROM_NAME: "Drop Worker",
         SMTP_HOST: "smtp.example.com",
         SMTP_PORT: "994",
@@ -114,7 +110,6 @@ test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
           R2_PUBLIC_URL: "http://drop-files.example.com",
           PUBLIC_URL: "https://drop.example.com",
           OWNER_EMAIL: "owner@example.com",
-          AUTH_EMAIL_PROVIDER: "smtp",
           SMTP_HOST: "smtp.example.com",
           SMTP_PORT: "587",
           SMTP_FROM: "owner@example.com",
@@ -130,11 +125,9 @@ test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
 test("GitHub Actions 在部署 Worker 前应用远程 D1 迁移", async () => {
   const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
   const migration = workflow.indexOf("d1 migrations apply DB --remote --config wrangler.jsonc");
-  const emailServiceDeploy = workflow.indexOf("部署 Worker（Cloudflare Email Service）");
   const smtpDeploy = workflow.indexOf("部署 Worker（自定义 SMTP）");
 
   assert.ok(migration >= 0, "部署流程必须应用远程 D1 迁移");
-  assert.ok(migration < emailServiceDeploy, "D1 迁移必须早于 Cloudflare Email Service 部署");
   assert.ok(migration < smtpDeploy, "D1 迁移必须早于 SMTP 部署");
 });
 
@@ -142,14 +135,14 @@ test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版�
   const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
   const actionCount = (workflow.match(/uses: cloudflare\/wrangler-action@v4/g) || []).length;
 
-  assert.equal(actionCount, 2, "两种 Worker 部署分支必须使用 Wrangler Action v4");
+  assert.equal(actionCount, 1, "Worker 部署必须使用 Wrangler Action v4");
   assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
   assert.match(workflow, /npx wrangler@4\.118\.0 d1 migrations apply DB --remote --config wrangler\.jsonc/);
   assert.match(workflow, /r2 bucket cors set "\$R2_BUCKET_NAME" --file/);
   assert.match(workflow, /R2_PUBLIC_URL: \$\{\{ vars\.R2_PUBLIC_URL \}\}/);
-  assert.equal((workflow.match(/command: deploy --config wrangler\.jsonc --keep-vars/g) || []).length, 2);
+  assert.equal((workflow.match(/command: deploy --config wrangler\.jsonc --keep-vars/g) || []).length, 1);
   assert.match(workflow, /R2_ACCESS_KEY_ID/);
   assert.match(workflow, /R2_SECRET_ACCESS_KEY/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限/);
-  assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 2);
+  assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 1);
 });

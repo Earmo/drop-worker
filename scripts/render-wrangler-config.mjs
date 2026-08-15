@@ -29,8 +29,6 @@ const databaseId = requireValue("D1_DATABASE_ID");
 const bucketName = requireValue("R2_BUCKET_NAME", `${workerName}-files`);
 const r2AccountId = requireValue("R2_ACCOUNT_ID");
 const ownerEmail = requireValue("OWNER_EMAIL");
-const emailProvider = requireOneOf("AUTH_EMAIL_PROVIDER", ["cloudflare", "smtp"], "cloudflare");
-const authFromEmail = readValue("AUTH_FROM_EMAIL");
 const authFromName = requireValue("AUTH_FROM_NAME", workerName);
 const maxStorageBytes = requireValue("MAX_STORAGE_BYTES", "10737418240");
 const publicUrl = requireValue("PUBLIC_URL");
@@ -62,15 +60,10 @@ if (r2PublicUrl && (
 if (!/^\d+$/.test(smtpTimeoutMs) || Number(smtpTimeoutMs) < 3000 || Number(smtpTimeoutMs) > 30000) {
   throw new Error("SMTP_TIMEOUT_MS 必须是 3000 到 30000 之间的整数");
 }
-if (emailProvider === "cloudflare" && !authFromEmail) {
-  throw new Error("Cloudflare Email Service 模式缺少 AUTH_FROM_EMAIL");
+if (!smtpHost || !SUPPORTED_SMTP_PORTS.includes(smtpPort)) {
+  throw new Error(`必须提供 SMTP_HOST，并使用 ${SUPPORTED_SMTP_PORTS.join("、")} 端口`);
 }
-if (emailProvider === "smtp" && (!smtpHost || !SUPPORTED_SMTP_PORTS.includes(smtpPort))) {
-  throw new Error(`SMTP 模式必须提供 SMTP_HOST，并使用 ${SUPPORTED_SMTP_PORTS.join("、")} 端口`);
-}
-if (emailProvider === "smtp" && !smtpFrom && !authFromEmail) {
-  throw new Error("SMTP 模式必须提供 SMTP_FROM 或 AUTH_FROM_EMAIL");
-}
+if (!smtpFrom) throw new Error("必须提供 SMTP_FROM");
 
 const config = {
   $schema: "./node_modules/wrangler/config-schema.json",
@@ -97,20 +90,8 @@ const config = {
       bucket_name: bucketName,
     },
   ],
-  ...(emailProvider === "cloudflare"
-    ? {
-        send_email: [
-          {
-            name: "EMAIL",
-            destination_address: ownerEmail,
-            remote: true,
-          },
-        ],
-      }
-    : {}),
   vars: {
     AUTH_MODE: "smtp-otp",
-    AUTH_EMAIL_PROVIDER: emailProvider,
     MAX_STORAGE_BYTES: maxStorageBytes,
     PUBLIC_URL: publicUrl,
     SHARING_ENABLED: sharingEnabled,
@@ -118,15 +99,12 @@ const config = {
     R2_BUCKET_NAME: bucketName,
     ...(r2PublicUrl ? { R2_PUBLIC_URL: r2PublicUrl.toString() } : {}),
     OWNER_EMAIL: ownerEmail,
-    AUTH_FROM_EMAIL: authFromEmail,
     AUTH_FROM_NAME: authFromName,
     SMTP_HOST: smtpHost,
     SMTP_PORT: smtpPort,
     SMTP_SECURE: smtpSecure,
     SMTP_FROM: smtpFrom,
     SMTP_TIMEOUT_MS: smtpTimeoutMs,
-    CF_ACCESS_TEAM_DOMAIN: readValue("CF_ACCESS_TEAM_DOMAIN"),
-    CF_ACCESS_AUD: readValue("CF_ACCESS_AUD"),
   },
   triggers: {
     crons: ["17 * * * *"],
@@ -159,7 +137,6 @@ await writeFile(corsPath, `${JSON.stringify({
   ],
 }, null, 2)}\n`, "utf8");
 if (process.env.GITHUB_OUTPUT) {
-  await appendFile(process.env.GITHUB_OUTPUT, `email_provider=${emailProvider}\n`, "utf8");
   await appendFile(process.env.GITHUB_OUTPUT, `r2_bucket_name=${bucketName}\n`, "utf8");
   await appendFile(process.env.GITHUB_OUTPUT, `r2_cors_config=${corsPath}\n`, "utf8");
 }

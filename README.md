@@ -13,7 +13,7 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 
 应用支持两种正式部署方式：
 
-- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用 Cloudflare Email Service 邮箱验证码或受 `OWNER_EMAIL` 限制的 Sites 平台身份。
+- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用自定义 SMTP 邮箱验证码。
 - 本地自托管：单个 Node.js 进程，可选择 SQLite/MySQL/PostgreSQL 与本地文件系统/S3 兼容存储。
 
 ## 环境要求
@@ -57,8 +57,9 @@ pnpm start
 - `SMTP_HOST`
 - `SMTP_PORT`
 - `SMTP_SECURE`
-- `SMTP_USER` / `SMTP_PASSWORD`（服务器需要认证时）
+- `SMTP_USERNAME` / `SMTP_PASSWORD`（服务器需要认证时）
 - `SMTP_FROM`
+- `AUTH_FROM_NAME`
 
 验证码 10 分钟有效，登录会话保持 30 天。
 
@@ -175,8 +176,6 @@ npm run admin -- migrate-storage ./backups/migration-work
 
 ```powershell
 $env:DROP_WORKER_BASE_URL="https://drop.example.com"
-$env:CF_ACCESS_CLIENT_ID="你的 Access 服务令牌 ID"
-$env:CF_ACCESS_CLIENT_SECRET="你的 Access 服务令牌 Secret"
 pnpm admin -- remote-backup ./backups/cloudflare
 ```
 
@@ -196,14 +195,14 @@ pnpm admin -- remote-restore ./backups/cloudflare
 Copy-Item wrangler.example.jsonc wrangler.jsonc
 ```
 
-模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1、R2、邮件、变量、定时任务和可观测性配置。
+模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1、R2、SMTP、变量、定时任务和可观测性配置。
 
 然后编辑 `wrangler.jsonc` 中的 `<D1_DATABASE_ID>`、R2 桶名、个人邮箱和发件地址。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
 
 `wrangler.jsonc` 声明了 D1、R2、静态资源、每小时清理任务和可观测性。首次部署前：
 
-1. 在 Cloudflare Email Service 中启用发信域名，并验证接收验证码的个人邮箱。
-2. 配置 `OWNER_EMAIL`、`AUTH_FROM_EMAIL` 和 `AUTH_FROM_NAME`。`AUTH_FROM_EMAIL` 必须属于已在 Email Service 中验证的域名；`send_email` 绑定固定收件人，发件地址可以按配置切换。
+1. 配置 `OWNER_EMAIL`、`AUTH_FROM_NAME`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SECURE`、`SMTP_FROM` 和 `SMTP_TIMEOUT_MS`。
+2. 使用 `wrangler secret put SMTP_USERNAME` 与 `wrangler secret put SMTP_PASSWORD` 保存 SMTP 凭据。
 3. 为目标 R2 桶创建“对象读写”S3 API Token，把 Access Key ID 和 Secret Access Key 分别保存为 `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` Worker Secret，并在变量中配置 `R2_ACCOUNT_ID` 与 `R2_BUCKET_NAME`。
 4. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
 5. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
@@ -247,20 +246,13 @@ npx wrangler r2 bucket cors set drop-worker-files --file r2-cors.json --force
 
 验证码 10 分钟有效，连续输入错误 5 次后失效，同一邮箱 60 秒内不能重复发送。登录会话通过 HttpOnly、Secure Cookie 保持 30 天；R2 桶保持私有。
 
-### Sites 托管与匿名分享
+### Cloudflare SMTP
 
-使用 Sites 托管时，若要让未登录访客打开分享链接，站点访问模式必须设为公开。Sites 当前不能只公开 `/s/*` 路径，因此应用外壳也会公开加载；所有条目、上传、管理和分享配置接口仍由应用身份校验保护，并且只有 `OWNER_EMAIL` 对应的平台身份会被识别为所有者。
-
-Sites 生产环境至少需要配置 `AUTH_MODE=platform`、`OWNER_EMAIL`、`AUTH_SESSION_SECRET`、`PUBLIC_URL` 和 `SHARING_ENABLED=true`。其中 `AUTH_SESSION_SECRET` 作为 Secret 保存，`PUBLIC_URL` 使用实际生产 HTTPS 地址。缺少所有者邮箱或安全密钥时应用会拒绝提供受保护能力，不能通过把 Sites 保持为私有来替代应用层鉴权。
-
-### Cloudflare 自定义 SMTP
-
-如果不使用 Cloudflare Email Service，可以切换为自定义 SMTP。Cloudflare Workers 的 TCP Socket 不允许连接 25 端口，因此 SMTP 使用 465/994（隐式 TLS）或 587（STARTTLS）：
+Cloudflare Worker 只使用自定义 SMTP。Workers 的 TCP Socket 不允许连接 25 端口，因此 SMTP 使用 465/994（隐式 TLS）或 587（STARTTLS）：
 
 ```jsonc
 {
   "vars": {
-    "AUTH_EMAIL_PROVIDER": "smtp",
     "SMTP_HOST": "smtp.example.com",
     "SMTP_PORT": "587",
     "SMTP_SECURE": "false",
@@ -278,7 +270,7 @@ Sites 生产环境至少需要配置 `AUTH_MODE=platform`、`OWNER_EMAIL`、`AUT
 npm run cf:deploy
 ```
 
-SMTP 用户名和密码不会写入 `wrangler.jsonc` 或日志。Cloudflare 部署使用 SMTP 配置时，`SMTP_FROM` 是实际发件地址；留空时回退到 `AUTH_FROM_EMAIL`。使用自定义 SMTP 时不需要 `send_email` 绑定，GitHub Actions 生成的生产配置会自动省略它。
+SMTP 用户名和密码不会写入 `wrangler.jsonc` 或日志。`SMTP_FROM` 是实际发件地址，`AUTH_FROM_NAME` 是显示名称；SMTP 端口只支持 465、587 和 994。Worker 的 SMTP 连接由独立适配器处理，认证流程与本地 Node.js 运行时共用。
 
 ### 从本机部署 Cloudflare Worker
 
@@ -306,7 +298,6 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `D1_DATABASE_NAME` | D1 数据库名称 | 与 Worker 名称相同 |
 | `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
 | `R2_PUBLIC_URL` | 可选的公开 R2 自定义下载域名 | 空，继续由 Worker 返回文件 |
-| `AUTH_EMAIL_PROVIDER` | `cloudflare` 或 `smtp` | `cloudflare` |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
 | `PUBLIC_URL` | 生成分享链接的可信 HTTPS 地址 | 必填 |
 | `SHARING_ENABLED` | 是否允许创建和访问分享 | `true` |
@@ -314,8 +305,6 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `SMTP_PORT` | SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS） | `587` |
 | `SMTP_SECURE` | 是否使用隐式 TLS | `false` |
 | `SMTP_TIMEOUT_MS` | SMTP 超时毫秒数 | `15000` |
-| `CF_ACCESS_TEAM_DOMAIN` | 可选的 Cloudflare Access 团队域名 | 空 |
-| `CF_ACCESS_AUD` | 可选的 Cloudflare Access Audience | 空 |
 
 再配置以下 Secrets。GitHub Variables 不是机密存储，个人邮箱、资源 ID、账号凭据和密码应放在 Secrets：
 
@@ -325,12 +314,11 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
 | `D1_DATABASE_ID` | 生产 D1 数据库 UUID | 必填 |
 | `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
-| `AUTH_FROM_EMAIL` | Cloudflare Email Service 发件地址或 SMTP 回退地址 | Cloudflare 发信时必填 |
 | `AUTH_SESSION_SECRET` | 30 天会话签名密钥 | 必填，至少 32 字节随机值 |
 | `R2_ACCESS_KEY_ID` | R2 S3 API Access Key ID | 必填；只授予目标桶对象读写权限 |
 | `R2_SECRET_ACCESS_KEY` | R2 S3 API Secret Access Key | 必填；保存后不会发送到浏览器 |
-| `SMTP_HOST` | 自定义 SMTP 服务器 | SMTP 模式必填 |
-| `SMTP_FROM` | 自定义 SMTP 实际发件地址 | SMTP 模式可与 `AUTH_FROM_EMAIL` 二选一 |
+| `SMTP_HOST` | 自定义 SMTP 服务器 | 必填 |
+| `SMTP_FROM` | 自定义 SMTP 实际发件地址 | 必填 |
 | `SMTP_USERNAME` | SMTP 用户名 | SMTP 模式必填 |
 | `SMTP_PASSWORD` | SMTP 密码 | SMTP 模式必填 |
 
@@ -361,7 +349,6 @@ npm test
 - `db/`：SQLite/D1、MySQL 和 PostgreSQL 的方言 Schema。
 - `drizzle/config/`：三种数据库方言的 Drizzle Kit 生成配置。
 - `drizzle/{sqlite,mysql,postgres}/`：按数据库方言归档的正式迁移与 Drizzle 快照。
-- `tools/`：构建期间运行的 Sites/Vite 插件；运行时业务代码不放在构建产物目录。
 
 Node.js 与 Cloudflare 入口各自组装统一的 `AppContext`。API 只依赖元数据、文件对象、上传传输和认证等能力端口；数据库、文件服务、认证方式和直传能力在启动阶段依据部署配置选择，运行期间不会热切换。
 

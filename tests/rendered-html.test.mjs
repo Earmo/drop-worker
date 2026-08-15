@@ -43,7 +43,7 @@ test("成品源码包含核心工作区且不再引用预览骨架", async () =>
   assert.match(app, /存储清理/);
   assert.match(app, /回收站/);
   assert.match(layout, /og\.png/);
-  assert.doesNotMatch(`${page}${layout}${packageJson}`, /_sites-preview|react-loading-skeleton|codex-preview/);
+  assert.doesNotMatch(`${page}${layout}${packageJson}`, /react-loading-skeleton|codex-preview/);
 });
 
 test("视图筛选切换会清理选择，并使用通用文件选择器", async () => {

@@ -18,6 +18,11 @@ export function authOtpText(code: string): string {
   return `你的验证码是 ${code}，10 分钟内有效。若非本人操作，请忽略本邮件。`;
 }
 
+/** HTML 正文只包含固定文案和六位数字验证码，供各运行时的 SMTP 适配器复用。 */
+export function authOtpHtml(code: string): string {
+  return `<p>你的 Drop Worker 登录验证码是：</p><p style="font-size:28px;font-weight:700;letter-spacing:6px">${code}</p><p>验证码 10 分钟内有效。若非本人操作，请忽略本邮件。</p>`;
+}
+
 export function readCookie(request: Request, name: string): string | null {
   const header = request.headers.get("cookie");
   if (!header) return null;

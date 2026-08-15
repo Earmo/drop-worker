@@ -58,6 +58,15 @@ type UploadRow = {
   expires_at: number;
 };
 
+type AuthChallengeRow = {
+  id: string;
+  email: string;
+  code_hash: string;
+  attempts: number;
+  created_at: number;
+  expires_at: number;
+};
+
 type ShareJoinedRow = {
   share_id: string;
   share_owner_id: string;
@@ -161,6 +170,17 @@ function uploadFromRow(row: UploadRow): UploadRecord {
     fingerprint: row.fingerprint,
     parts,
     status: row.status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+function authChallengeFromRow(row: AuthChallengeRow): AuthChallengeRecord {
+  return {
+    id: row.id,
+    email: row.email,
+    codeHash: row.code_hash,
+    attempts: row.attempts,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };
@@ -957,35 +977,50 @@ export class SqlMetadataStore implements MetadataStore {
     );
   }
 
+  async replaceAuthChallenge(input: AuthChallengeRecord): Promise<void> {
+    // 新验证码写入与旧验证码清理必须在同一事务中完成，避免发送失败后继续保留旧挑战。
+    await this.sql.batch([
+      {
+        sql: "DELETE FROM auth_challenges WHERE email = ? OR expires_at <= ?",
+        params: [input.email, input.createdAt],
+      },
+      {
+        sql: `INSERT INTO auth_challenges (id, email, code_hash, attempts, created_at, expires_at)
+              VALUES (?, ?, ?, ?, ?, ?)`,
+        params: [input.id, input.email, input.codeHash, input.attempts, input.createdAt, input.expiresAt],
+      },
+    ]);
+  }
+
+  async getLatestAuthChallenge(email: string): Promise<AuthChallengeRecord | null> {
+    const row = await this.sql.first<AuthChallengeRow>(
+      `SELECT id, email, code_hash, attempts, created_at, expires_at
+       FROM auth_challenges WHERE email = ? ORDER BY created_at DESC LIMIT 1`,
+      [email],
+    );
+    return row ? authChallengeFromRow(row) : null;
+  }
+
   async getAuthChallenge(id: string, email: string): Promise<AuthChallengeRecord | null> {
-    const row = await this.sql.first<{
-      id: string;
-      email: string;
-      code_hash: string;
-      attempts: number;
-      created_at: number;
-      expires_at: number;
-    }>(
+    const row = await this.sql.first<AuthChallengeRow>(
       `SELECT id, email, code_hash, attempts, created_at, expires_at
        FROM auth_challenges WHERE id = ? AND email = ?`,
       [id, email],
     );
-    return row ? {
-      id: row.id,
-      email: row.email,
-      codeHash: row.code_hash,
-      attempts: row.attempts,
-      createdAt: row.created_at,
-      expiresAt: row.expires_at,
-    } : null;
+    return row ? authChallengeFromRow(row) : null;
   }
 
-  async incrementAuthChallengeAttempts(id: string): Promise<void> {
-    await this.sql.run("UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ?", [id]);
+  async incrementAuthChallengeAttempts(id: string, maxAttempts = Number.MAX_SAFE_INTEGER): Promise<boolean> {
+    const result = await this.sql.run(
+      "UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ? AND attempts < ?",
+      [id, maxAttempts],
+    );
+    return result.changes > 0;
   }
 
-  async deleteAuthChallenge(id: string): Promise<void> {
-    await this.sql.run("DELETE FROM auth_challenges WHERE id = ?", [id]);
+  async deleteAuthChallenge(id: string): Promise<boolean> {
+    const result = await this.sql.run("DELETE FROM auth_challenges WHERE id = ?", [id]);
+    return result.changes > 0;
   }
 
   async isPortableTargetEmpty(): Promise<boolean> {

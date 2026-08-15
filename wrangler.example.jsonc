@@ -40,23 +40,10 @@
       "bucket_name": "drop-worker-files"
     }
   ],
-  // Cloudflare Email Service 发信绑定；改用自定义 SMTP 时可以删除整个 send_email 数组。
-  "send_email": [
-    {
-      // Worker 代码通过 env.EMAIL 发送邮件。
-      "name": "EMAIL",
-      // 固定允许投递到的收件地址；这里填写自己的邮箱。
-      "destination_address": "you@example.com",
-      // 本地 Wrangler 开发也使用远程 Email Service 绑定。
-      "remote": true
-    }
-  ],
   // 非机密运行时变量。会以明文进入 Worker 配置，不要放密码或 Token。
   "vars": {
     // 认证模式；smtp-otp 表示使用邮箱一次性验证码登录。
     "AUTH_MODE": "smtp-otp",
-    // 验证码邮件提供方：cloudflare 使用 Email Service，smtp 使用自定义 SMTP。
-    "AUTH_EMAIL_PROVIDER": "smtp",
     // 单实例最大存储空间，单位为字节。
     "MAX_STORAGE_BYTES": "10737418240",
     // 生成公开分享链接时使用的可信地址，不能从请求 Host 动态推断。
@@ -71,24 +58,18 @@
     "R2_PUBLIC_URL": "https://drop-files.example.com",
     // 唯一允许登录的个人邮箱，也用于接收验证码。
     "OWNER_EMAIL": "you@example.com",
-    // 验证码邮件的发件地址；使用 Cloudflare Email Service 时必须是已验证域名地址。
-    "AUTH_FROM_EMAIL": "noreply@example.com",
     // 验证码邮件显示的发件人名称。
     "AUTH_FROM_NAME": "Drop Worker",
-    // 自定义 SMTP 服务器地址；AUTH_EMAIL_PROVIDER 为 smtp 时必填。
+    // 自定义 SMTP 服务器地址。
     "SMTP_HOST": "smtp.163.com",
     // SMTP 端口，支持 465/994（隐式 TLS）或 587（STARTTLS）。
     "SMTP_PORT": "994",
     // 是否使用隐式 TLS；465/994 通常设为 true，587 通常设为 false 并使用 STARTTLS。
-    "SMTP_SECURE": "false",
-    // 自定义 SMTP 的实际发件地址；留空时回退到 AUTH_FROM_EMAIL。
-    "SMTP_FROM": "",
+    "SMTP_SECURE": "true",
+    // 自定义 SMTP 的实际发件地址。
+    "SMTP_FROM": "noreply@example.com",
     // SMTP 连接超时时间，单位为毫秒。
-    "SMTP_TIMEOUT_MS": "15000",
-    // 使用 Cloudflare Access JWT 身份时填写团队域名；邮箱验证码模式可留空。
-    "CF_ACCESS_TEAM_DOMAIN": "",
-    // 使用 Cloudflare Access JWT 身份时填写 Access 应用 Audience；邮箱验证码模式可留空。
-    "CF_ACCESS_AUD": ""
+    "SMTP_TIMEOUT_MS": "15000"
   },
   // 定时任务配置；17 * * * * 表示每小时执行一次计划清理任务。
   "triggers": {

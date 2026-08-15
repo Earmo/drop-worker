@@ -56,7 +56,7 @@ test("Node 运行时配置在启动阶段选择并校验驱动", () => {
     process.env.DATABASE_DRIVER = "unsupported";
     assert.throws(() => loadNodeRuntimeConfig(), /DATABASE_DRIVER/);
     process.env.DATABASE_DRIVER = "sqlite";
-    process.env.AUTH_MODE = "platform";
+    process.env.AUTH_MODE = "legacy";
     assert.throws(() => loadNodeRuntimeConfig(), /AUTH_MODE/);
   } finally {
     restore();
@@ -65,12 +65,17 @@ test("Node 运行时配置在启动阶段选择并校验驱动", () => {
 
 test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭据", () => {
   const baseEnv = {
-    AUTH_MODE: "platform",
+    AUTH_MODE: "smtp-otp",
     OWNER_EMAIL: "Owner@Example.com",
     AUTH_SESSION_SECRET: "a-secure-session-secret-that-is-long-enough",
     PUBLIC_URL: "https://drop.example.com",
     MAX_STORAGE_BYTES: "2048",
     SHARING_ENABLED: "true",
+    SMTP_HOST: "smtp.example.com",
+    SMTP_PORT: "587",
+    SMTP_SECURE: "false",
+    SMTP_FROM: "owner@example.com",
+    AUTH_FROM_NAME: "Drop Worker",
     DB: {},
     FILES: {},
   } as unknown as Env;
@@ -87,7 +92,7 @@ test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭�
   assert.equal(config.directUpload?.bucketName, "bucket");
 
   assert.throws(
-    () => loadCloudflareRuntimeConfig({ ...baseEnv, AUTH_MODE: "invalid" } as unknown as Env),
+    () => loadCloudflareRuntimeConfig({ ...baseEnv, AUTH_MODE: "legacy" } as unknown as Env),
     /AUTH_MODE/,
   );
   assert.throws(
