@@ -93,6 +93,25 @@ test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
   await assert.rejects(newerSchema.ensureSchema(), /数据库架构尚未迁移/);
 });
 
+test("关系型数据库默认递增验证码尝试次数不传递超出 PostgreSQL integer 范围的上限", async () => {
+  let captured: { sql: string; params: (string | number | null)[] } | undefined;
+  const metadata = new SqlMetadataStore({
+    tableExists: async () => true,
+    all: async <T>() => [] as T[],
+    first: async <T>() => null as T | null,
+    run: async (sql, params = []) => {
+      captured = { sql, params };
+      return { changes: 1 };
+    },
+    batch: async () => [],
+  }, false);
+
+  await metadata.incrementAuthChallengeAttempts("challenge-id");
+
+  assert.equal(captured?.sql, "UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ?");
+  assert.deepEqual(captured?.params, ["challenge-id"]);
+});
+
 test("分享口令密文只可由同一部署和分享记录解密", async () => {
   const encrypted = await encryptShareCode("test-share-secret-that-is-long-enough", "share-a", "0042");
   assert.notEqual(encrypted, "0042");

@@ -1010,11 +1010,14 @@ export class SqlMetadataStore implements MetadataStore {
     return row ? authChallengeFromRow(row) : null;
   }
 
-  async incrementAuthChallengeAttempts(id: string, maxAttempts = Number.MAX_SAFE_INTEGER): Promise<boolean> {
-    const result = await this.sql.run(
-      "UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ? AND attempts < ?",
-      [id, maxAttempts],
-    );
+  async incrementAuthChallengeAttempts(id: string, maxAttempts?: number): Promise<boolean> {
+    // PostgreSQL 会按 attempts 的 int4 类型推断比较参数；无上限调用不能绑定超出 int4 范围的 Number.MAX_SAFE_INTEGER。
+    const result = maxAttempts === undefined
+      ? await this.sql.run("UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ?", [id])
+      : await this.sql.run(
+        "UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = ? AND attempts < ?",
+        [id, maxAttempts],
+      );
     return result.changes > 0;
   }
 
