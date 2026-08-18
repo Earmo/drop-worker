@@ -24,8 +24,10 @@ function requireOneOf(name, allowed, fallback) {
 
 const outputPath = path.resolve(process.argv[2] || "wrangler.jsonc");
 const workerName = requireValue("WORKER_NAME", "drop-worker");
-const databaseName = requireValue("D1_DATABASE_NAME", workerName);
-const databaseId = requireValue("D1_DATABASE_ID");
+const databaseDriver = requireOneOf("DATABASE_DRIVER", ["sqlite", "mysql", "postgres"], "sqlite");
+const databaseName = readValue("D1_DATABASE_NAME", workerName);
+const databaseId = readValue("D1_DATABASE_ID");
+const hyperdriveId = readValue("HYPERDRIVE_ID");
 const bucketName = requireValue("R2_BUCKET_NAME", `${workerName}-files`);
 const r2AccountId = requireValue("R2_ACCOUNT_ID");
 const ownerEmail = requireValue("OWNER_EMAIL");
@@ -41,8 +43,12 @@ const smtpSecure = requireOneOf("SMTP_SECURE", ["true", "false"], "false");
 const smtpFrom = readValue("SMTP_FROM");
 const smtpTimeoutMs = requireValue("SMTP_TIMEOUT_MS", "15000");
 
-if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(databaseId)) {
-  throw new Error("D1_DATABASE_ID 必须是有效的 UUID");
+const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+if (databaseDriver === "sqlite" && !uuidPattern.test(databaseId)) {
+  throw new Error("sqlite 模式的 D1_DATABASE_ID 必须是有效的 UUID");
+}
+if (databaseDriver !== "sqlite" && !uuidPattern.test(hyperdriveId)) {
+  throw new Error("mysql/postgres 模式的 HYPERDRIVE_ID 必须是有效的 UUID");
 }
 if (!/^\d+$/.test(maxStorageBytes) || BigInt(maxStorageBytes) <= 0n) {
   throw new Error("MAX_STORAGE_BYTES 必须是正整数");
@@ -76,14 +82,25 @@ const config = {
     binding: "ASSETS",
     not_found_handling: "single-page-application",
   },
-  d1_databases: [
-    {
-      binding: "DB",
-      database_name: databaseName,
-      database_id: databaseId,
-      migrations_dir: "./drizzle/sqlite",
-    },
-  ],
+  ...(databaseDriver === "sqlite"
+    ? {
+        d1_databases: [
+          {
+            binding: "DB",
+            database_name: databaseName,
+            database_id: databaseId,
+            migrations_dir: "./drizzle/sqlite",
+          },
+        ],
+      }
+    : {
+        hyperdrive: [
+          {
+            binding: "HYPERDRIVE",
+            id: hyperdriveId,
+          },
+        ],
+      }),
   r2_buckets: [
     {
       binding: "FILES",
@@ -91,6 +108,7 @@ const config = {
     },
   ],
   vars: {
+    DATABASE_DRIVER: databaseDriver,
     AUTH_MODE: "smtp-otp",
     MAX_STORAGE_BYTES: maxStorageBytes,
     PUBLIC_URL: publicUrl,
@@ -137,6 +155,7 @@ await writeFile(corsPath, `${JSON.stringify({
   ],
 }, null, 2)}\n`, "utf8");
 if (process.env.GITHUB_OUTPUT) {
+  await appendFile(process.env.GITHUB_OUTPUT, `database_driver=${databaseDriver}\n`, "utf8");
   await appendFile(process.env.GITHUB_OUTPUT, `r2_bucket_name=${bucketName}\n`, "utf8");
   await appendFile(process.env.GITHUB_OUTPUT, `r2_cors_config=${corsPath}\n`, "utf8");
 }

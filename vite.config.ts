@@ -12,6 +12,7 @@ const localBindingConfig = {
   compatibility_flags: ["nodejs_compat"],
   compatibility_date: "2026-08-11",
   vars: {
+    DATABASE_DRIVER: "sqlite",
     AUTH_MODE: "development",
     OWNER_EMAIL: "local@drop-worker.invalid",
     MAX_STORAGE_BYTES: String(10 * 1024 * 1024 * 1024),

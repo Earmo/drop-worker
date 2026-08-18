@@ -1,4 +1,8 @@
 interface Env {
+  DATABASE_DRIVER: string;
+  DB: D1Database;
+  HYPERDRIVE: Hyperdrive;
+  FILES: R2Bucket;
   AUTH_SESSION_SECRET: string;
   OWNER_EMAIL: string;
   AUTH_FROM_NAME: string;
@@ -20,6 +24,10 @@ interface Env {
 
 declare namespace Cloudflare {
   interface Env {
+    DATABASE_DRIVER: string;
+    DB: D1Database;
+    HYPERDRIVE: Hyperdrive;
+    FILES: R2Bucket;
     AUTH_SESSION_SECRET: string;
     OWNER_EMAIL: string;
     AUTH_FROM_NAME: string;

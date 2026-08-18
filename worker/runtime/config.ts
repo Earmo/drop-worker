@@ -1,5 +1,10 @@
 import { normalizeEmail } from "../../api/auth";
-import { DEFAULT_QUOTA_BYTES, positiveInteger } from "../../api/runtime-config";
+import {
+  DEFAULT_QUOTA_BYTES,
+  parseDatabaseDriver,
+  positiveInteger,
+  type DatabaseDriver,
+} from "../../api/runtime-config";
 import { validatePublicUrl } from "../../api/sharing";
 
 export type CloudflareAuthMode = "smtp-otp" | "development";
@@ -24,6 +29,7 @@ export type CloudflareDirectUploadConfig = {
 };
 
 export type CloudflareRuntimeConfig = {
+  databaseDriver: DatabaseDriver;
   authMode: CloudflareAuthMode;
   ownerEmail?: string;
   quotaBytes: number;
@@ -97,6 +103,7 @@ export function loadCloudflareRuntimeConfig(env: Env): CloudflareRuntimeConfig {
   }
 
   return {
+    databaseDriver: parseDatabaseDriver(env.DATABASE_DRIVER),
     authMode: mode,
     ownerEmail,
     quotaBytes: positiveInteger("MAX_STORAGE_BYTES", env.MAX_STORAGE_BYTES, DEFAULT_QUOTA_BYTES),

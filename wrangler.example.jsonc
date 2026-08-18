@@ -31,6 +31,16 @@
       "migrations_dir": "./drizzle/sqlite"
     }
   ],
+  // MySQL/PostgreSQL 通过 Hyperdrive 连接；DATABASE_DRIVER=sqlite 时此绑定不会被使用。
+  // 生产配置只需保留所选驱动对应的 DB 或 HYPERDRIVE 绑定。
+  "hyperdrive": [
+    {
+      // Worker 代码通过 env.HYPERDRIVE 获取短期连接信息和连接字符串。
+      "binding": "HYPERDRIVE",
+      // 在 Cloudflare 控制台创建 Hyperdrive 配置后替换此 ID。
+      "id": "<HYPERDRIVE_CONFIG_ID>"
+    }
+  ],
   // R2 对象存储桶绑定，用于保存上传文件。
   "r2_buckets": [
     {
@@ -42,6 +52,8 @@
   ],
   // 非机密运行时变量。会以明文进入 Worker 配置，不要放密码或 Token。
   "vars": {
+    // sqlite 使用上面的 D1；mysql/postgres 使用 HYPERDRIVE。
+    "DATABASE_DRIVER": "sqlite",
     // 认证模式；smtp-otp 表示使用邮箱一次性验证码登录。
     "AUTH_MODE": "smtp-otp",
     // 单实例最大存储空间，单位为字节。

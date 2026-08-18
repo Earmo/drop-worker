@@ -20,6 +20,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
       env: {
         ...process.env,
         WORKER_NAME: "drop-worker",
+        DATABASE_DRIVER: "sqlite",
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
@@ -71,6 +72,7 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
       env: {
         ...process.env,
         WORKER_NAME: "drop-worker",
+        DATABASE_DRIVER: "sqlite",
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
@@ -105,6 +107,7 @@ test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
         env: {
           ...process.env,
           WORKER_NAME: "drop-worker",
+          DATABASE_DRIVER: "sqlite",
           D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
           R2_ACCOUNT_ID: "1234567890abcdef",
           R2_PUBLIC_URL: "http://drop-files.example.com",
@@ -122,6 +125,40 @@ test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
   }
 });
 
+test("生产配置为 PostgreSQL 生成 Hyperdrive 绑定且不保留 D1", async () => {
+  const root = await mkdtemp(join(tmpdir(), "drop-worker-render-"));
+  try {
+    const output = join(root, "wrangler.jsonc");
+    await execFileAsync(process.execPath, [renderScript, output], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        WORKER_NAME: "drop-worker",
+        DATABASE_DRIVER: "postgres",
+        D1_DATABASE_ID: "",
+        HYPERDRIVE_ID: "87654321-4321-4321-4321-cba987654321",
+        R2_BUCKET_NAME: "drop-worker-files",
+        R2_ACCOUNT_ID: "1234567890abcdef",
+        PUBLIC_URL: "https://drop.example.com",
+        OWNER_EMAIL: "owner@example.com",
+        SMTP_HOST: "smtp.example.com",
+        SMTP_PORT: "587",
+        SMTP_FROM: "owner@example.com",
+      },
+    });
+
+    const config = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(config.vars.DATABASE_DRIVER, "postgres");
+    assert.deepEqual(config.hyperdrive, [{
+      binding: "HYPERDRIVE",
+      id: "87654321-4321-4321-4321-cba987654321",
+    }]);
+    assert.equal(config.d1_databases, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("GitHub Actions 在部署 Worker 前应用远程 D1 迁移", async () => {
   const workflow = await readFile(join(repoRoot, ".github", "workflows", "deploy.yml"), "utf8");
   const migration = workflow.indexOf("d1 migrations apply DB --remote --config wrangler.jsonc");
@@ -129,6 +166,9 @@ test("GitHub Actions 在部署 Worker 前应用远程 D1 迁移", async () => {
 
   assert.ok(migration >= 0, "部署流程必须应用远程 D1 迁移");
   assert.ok(migration < smtpDeploy, "D1 迁移必须早于 SMTP 部署");
+  assert.match(workflow, /steps\.wrangler-config\.outputs\.database_driver == 'sqlite'/);
+  assert.match(workflow, /npm run admin -- migrate-database/);
+  assert.match(workflow, /HYPERDRIVE_ID: \$\{\{ secrets\.HYPERDRIVE_ID \}\}/);
 });
 
 test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版本", async () => {

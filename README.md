@@ -13,7 +13,7 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 
 应用支持两种正式部署方式：
 
-- Cloudflare：Workers Static Assets + Worker + D1 + R2，使用自定义 SMTP 邮箱验证码。
+- Cloudflare：Workers Static Assets + Worker + D1 或 Hyperdrive(MySQL/PostgreSQL) + R2，使用自定义 SMTP 邮箱验证码。
 - 本地自托管：单个 Node.js 进程，可选择 SQLite/MySQL/PostgreSQL 与本地文件系统/S3 兼容存储。
 
 ## 环境要求
@@ -195,11 +195,11 @@ pnpm admin -- remote-restore ./backups/cloudflare
 Copy-Item wrangler.example.jsonc wrangler.jsonc
 ```
 
-模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1、R2、SMTP、变量、定时任务和可观测性配置。
+模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1/Hyperdrive、R2、SMTP、变量、定时任务和可观测性配置。
 
-然后编辑 `wrangler.jsonc` 中的 `<D1_DATABASE_ID>`、R2 桶名、个人邮箱和发件地址。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
+然后选择 `DATABASE_DRIVER=sqlite|mysql|postgres`。SQLite 替换 `<D1_DATABASE_ID>`；MySQL/PostgreSQL 则替换 `<HYPERDRIVE_CONFIG_ID>`，并可删除未使用的另一类数据库绑定。随后填写 R2 桶名、个人邮箱和发件地址。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
 
-`wrangler.jsonc` 声明了 D1、R2、静态资源、每小时清理任务和可观测性。首次部署前：
+`wrangler.jsonc` 声明了所选数据库绑定、R2、静态资源、每小时清理任务和可观测性。首次部署前：
 
 1. 配置 `OWNER_EMAIL`、`AUTH_FROM_NAME`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SECURE`、`SMTP_FROM` 和 `SMTP_TIMEOUT_MS`。
 2. 使用 `wrangler secret put SMTP_USERNAME` 与 `wrangler secret put SMTP_PASSWORD` 保存 SMTP 凭据。
@@ -207,16 +207,21 @@ Copy-Item wrangler.example.jsonc wrangler.jsonc
 4. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
 5. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
 6. 为 R2 桶配置只允许 `PUBLIC_URL` 来源执行 `GET`、`HEAD`、`PUT`，允许 `Range`，并暴露下载响应头的 CORS。GitHub Actions 会自动生成并应用该配置；手工部署可参考下方命令。
-7. 生成类型并应用 D1 迁移。
+7. 生成类型并应用所选数据库的迁移。D1 使用 Wrangler；MySQL/PostgreSQL 使用现有管理命令直连数据库迁移。
 8. 构建并部署 Worker。
 
 ```powershell
 "你的 R2 Access Key ID" | npx wrangler secret put R2_ACCESS_KEY_ID --config wrangler.jsonc
 "你的 R2 Secret Access Key" | npx wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.jsonc
 npm run cf:types
+# DATABASE_DRIVER=sqlite
 npx wrangler d1 migrations apply drop-worker --remote --config wrangler.jsonc
+# DATABASE_DRIVER=mysql|postgres（在当前 shell 配置 DATABASE_DRIVER 和 DATABASE_URL）
+npm run admin -- migrate-database
 npm run cf:deploy
 ```
+
+MySQL/PostgreSQL Worker 部署必须在 Cloudflare 创建对应的 Hyperdrive 配置，并以 `HYPERDRIVE` 绑定注入。应用使用绑定内的临时连接信息：PostgreSQL 通过 `pg`，MySQL 通过启用 `disableEval` 的 `mysql2` 连接。每个 API/Cron 任务创建并关闭一个客户端，实际连接池由 Hyperdrive 管理。数据库版本要求与自托管一致，迁移用的 `DATABASE_URL` 只提供给管理命令或 CI，不写入 Worker 变量。
 
 生产环境上传使用 16 MiB 分片和四路并发，浏览器通过 15 分钟有效的预签名 URL 直接写入私有 R2 桶；Worker 只负责登录校验、配额、签名、分片确认和完成上传。未配置 R2 S3 API 凭据时会回退到 Worker 代理上传，便于本地开发，但生产部署流程会把缺少凭据视为配置错误。
 
@@ -288,14 +293,15 @@ npm run cf:deploy
 
 ### GitHub Actions 自动部署
 
-Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生产配置。代码 push 到 `main` 后会先完成类型检查、Lint、测试和生产构建；全部通过后，部署任务会从 GitHub `production` Environment 读取配置，生成临时 `wrangler.jsonc`，先应用待执行的远程 D1 迁移，再同步 Worker Secret 并部署新版 Worker。迁移失败会阻断发布，真实配置不会进入仓库。
+Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生产配置。代码 push 到 `main` 后会先完成类型检查、Lint、测试和生产构建；全部通过后，部署任务会从 GitHub `production` Environment 读取配置，生成临时 `wrangler.jsonc`，先按驱动应用 D1 或外部数据库迁移，再同步 Worker Secret 并部署新版 Worker。迁移失败会阻断发布，真实配置不会进入仓库。
 
 在 GitHub 仓库的 `Settings > Environments` 中创建 `production` Environment，并配置以下 Variables：
 
 | Variable | 用途 | 留空时的默认值 |
 | --- | --- | --- |
 | `WORKER_NAME` | Worker 名称 | `drop-worker` |
-| `D1_DATABASE_NAME` | D1 数据库名称 | 与 Worker 名称相同 |
+| `DATABASE_DRIVER` | Worker 元数据驱动：`sqlite`、`mysql` 或 `postgres` | `sqlite` |
+| `D1_DATABASE_NAME` | SQLite 模式的 D1 数据库名称 | 与 Worker 名称相同 |
 | `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
 | `R2_PUBLIC_URL` | 可选的公开 R2 自定义下载域名 | 空，继续由 Worker 返回文件 |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
@@ -310,9 +316,11 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 
 | Secret | 用途 | 要求 |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Wrangler 部署、D1 迁移与 R2 CORS 配置凭据 | 必填；需要目标账号的 Workers、D1 与 R2 编辑权限 |
+| `CLOUDFLARE_API_TOKEN` | Wrangler 部署、D1 迁移与 R2 CORS 配置凭据 | 必填；需要目标账号相应的 Workers、D1/Hyperdrive 与 R2 权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
-| `D1_DATABASE_ID` | 生产 D1 数据库 UUID | 必填 |
+| `D1_DATABASE_ID` | 生产 D1 数据库 UUID | `sqlite` 模式必填 |
+| `HYPERDRIVE_ID` | 生产 Hyperdrive 配置 UUID | `mysql`/`postgres` 模式必填 |
+| `DATABASE_URL` | CI 执行 MySQL/PostgreSQL 迁移使用的直连 URL | `mysql`/`postgres` 模式必填；不会注入 Worker |
 | `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
 | `AUTH_SESSION_SECRET` | 30 天会话签名密钥 | 必填，至少 32 字节随机值 |
 | `R2_ACCESS_KEY_ID` | R2 S3 API Access Key ID | 必填；只授予目标桶对象读写权限 |
@@ -322,9 +330,9 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | `SMTP_USERNAME` | SMTP 用户名 | SMTP 模式必填 |
 | `SMTP_PASSWORD` | SMTP 密码 | SMTP 模式必填 |
 
-部署配置由 `scripts/render-wrangler-config.mjs` 校验。缺少必填值、D1 ID 不是 UUID、SMTP 端口错误或 Secret 未配置时，工作流会明确失败，不会拿脱敏模板部署到生产。
+部署配置由 `scripts/render-wrangler-config.mjs` 校验。缺少所选驱动的 D1/Hyperdrive ID、ID 不是 UUID、SMTP 端口错误或 Secret 未配置时，工作流会明确失败，不会拿脱敏模板部署到生产。
 
-生产数据库迁移保持为独立人工步骤，不会在应用启动或每次部署时隐式执行。
+生产数据库迁移保持为独立发布步骤，不会在应用启动或请求处理中隐式执行。
 
 ## 开发与验证
 

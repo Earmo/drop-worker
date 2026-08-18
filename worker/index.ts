@@ -1,7 +1,7 @@
 import handler from "vinext/server/app-router-entry";
 import { handleApiRequest } from "../api/create-api";
 import { runCleanup } from "../api/cleanup";
-import { createCloudflareServices } from "./runtime/services";
+import { createCloudflareRuntime } from "./runtime/services";
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -9,7 +9,12 @@ const worker = {
       // API 请求走统一 Hono 路由；其他请求交给 Vinext 的应用路由和静态资源处理。
       const pathname = new URL(request.url).pathname;
       if (pathname.startsWith("/api/") || pathname.startsWith("/health/")) {
-        return handleApiRequest(request, createCloudflareServices(env));
+        const runtime = await createCloudflareRuntime(env);
+        try {
+          return await handleApiRequest(request, runtime.services);
+        } finally {
+          await runtime.close();
+        }
       }
       const response = await handler.fetch(request, env, ctx);
       if (!pathname.startsWith("/s/")) return response;
@@ -35,9 +40,15 @@ const worker = {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // Cron 触发器不能阻塞调度响应，清理任务交给 waitUntil 在后台完成。
     ctx.waitUntil(
-      runCleanup(createCloudflareServices(env)).then((result) => {
-        console.log(JSON.stringify({ message: "cleanup complete", ...result }));
-      }),
+      (async () => {
+        const runtime = await createCloudflareRuntime(env);
+        try {
+          const result = await runCleanup(runtime.services);
+          console.log(JSON.stringify({ message: "cleanup complete", ...result }));
+        } finally {
+          await runtime.close();
+        }
+      })(),
     );
   },
 };

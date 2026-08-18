@@ -65,6 +65,7 @@ test("Node 运行时配置在启动阶段选择并校验驱动", () => {
 
 test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭据", () => {
   const baseEnv = {
+    DATABASE_DRIVER: "sqlite",
     AUTH_MODE: "smtp-otp",
     OWNER_EMAIL: "Owner@Example.com",
     AUTH_SESSION_SECRET: "a-secure-session-secret-that-is-long-enough",
@@ -88,6 +89,7 @@ test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭�
     R2_SECRET_ACCESS_KEY: "secret",
   } as unknown as Env);
   assert.equal(config.ownerEmail, "owner@example.com");
+  assert.equal(config.databaseDriver, "sqlite");
   assert.equal(config.quotaBytes, 2048);
   assert.equal(config.directUpload?.bucketName, "bucket");
 
@@ -98,5 +100,13 @@ test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭�
   assert.throws(
     () => loadCloudflareRuntimeConfig({ ...baseEnv, R2_ACCESS_KEY_ID: "only-half" } as unknown as Env),
     /必须同时配置/,
+  );
+  assert.equal(
+    loadCloudflareRuntimeConfig({ ...baseEnv, DATABASE_DRIVER: "postgres" } as unknown as Env).databaseDriver,
+    "postgres",
+  );
+  assert.throws(
+    () => loadCloudflareRuntimeConfig({ ...baseEnv, DATABASE_DRIVER: "unsupported" } as unknown as Env),
+    /DATABASE_DRIVER/,
   );
 });

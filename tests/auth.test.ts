@@ -9,7 +9,7 @@ import { validatePublicUrl } from "../api/sharing";
 import type { MailMessage, MailSender } from "../api/platform";
 import { createPasswordHash, LocalAuth } from "../server/auth/local-auth";
 import { loadCloudflareRuntimeConfig } from "../worker/runtime/config";
-import { createCloudflareServices } from "../worker/runtime/services";
+import { createCloudflareRuntime } from "../worker/runtime/services";
 
 test("本地密码登录创建 30 天会话并支持退出", async () => {
   const root = await mkdtemp(join(tmpdir(), "drop-worker-auth-"));
@@ -186,12 +186,17 @@ test("Cloudflare 开发身份只在本机回环地址生效", async () => {
     DB: {},
     FILES: {},
   };
-  const services = createCloudflareServices({
+  const runtime = await createCloudflareRuntime({
     ...baseEnv,
+    DATABASE_DRIVER: "sqlite",
     OWNER_EMAIL: "owner@example.com",
   } as unknown as Env);
-  const owner = await services.auth.resolveIdentity(new Request("http://localhost/api/items"));
-  assert.equal(owner?.ownerId, "development:owner");
-  const remote = await services.auth.resolveIdentity(new Request("https://drop.example.com/api/items"));
-  assert.equal(remote, null);
+  try {
+    const owner = await runtime.services.auth.resolveIdentity(new Request("http://localhost/api/items"));
+    assert.equal(owner?.ownerId, "development:owner");
+    const remote = await runtime.services.auth.resolveIdentity(new Request("https://drop.example.com/api/items"));
+    assert.equal(remote, null);
+  } finally {
+    await runtime.close();
+  }
 });
