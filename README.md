@@ -20,7 +20,7 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 - Docker Compose：使用本地构建或 Docker Hub 多架构镜像运行。
 - Cloudflare Worker：Workers Static Assets + Worker + D1/Hyperdrive + R2/S3 兼容对象存储，可使用 Wrangler 手工发布或仓库专用的 GitHub Actions 自动发布。
 
-GitHub Actions 流水线只服务于 Cloudflare Worker 部署，不负责发布本地 Node.js、Docker Compose 或 systemd 实例。请根据运行环境选择 [部署方式](docs/deployment.md#部署方式)，不要混用本地自托管和 Cloudflare 的配置文件。
+GitHub Actions 流水线只服务于 Cloudflare Worker 部署，不负责发布本地 Node.js 或 Docker Compose 实例。请根据运行环境选择 [部署方式](docs/deployment.md#部署方式)，不要混用本地自托管和 Cloudflare 的配置文件。
 
 ## 快速开始
 

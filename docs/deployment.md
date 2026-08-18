@@ -8,10 +8,9 @@
 | --- | --- | --- |
 | 本地 Node.js | 单机或内网自托管 | SQLite/MySQL/PostgreSQL + 本地文件系统/S3 兼容存储 |
 | Docker Compose | 隔离运行环境，或使用 Docker Hub 镜像 | 默认 SQLite + 本地文件系统，也可接外部数据库和 S3/MinIO |
-| Linux systemd | Linux 主机上的长期服务 | 与本地 Node.js 方式相同 |
 | Cloudflare Worker | 使用 Cloudflare 托管公网服务；可手工或自动发布 | D1 或 Hyperdrive + R2/S3 兼容对象存储 |
 
-仓库的 GitHub Actions 发布流程不是独立部署方式，而是专门面向 Cloudflare Worker 的自动化部署入口。它不会部署本地 Node.js、Docker Compose 或 systemd 实例，也不是可复用于其他平台的通用发布流水线。
+仓库的 GitHub Actions 发布流程不是独立部署方式，而是专门面向 Cloudflare Worker 的自动化部署入口。它不会部署本地 Node.js 或 Docker Compose 实例，也不是可复用于其他平台的通用发布流水线。
 
 ### 通用要求
 
@@ -123,10 +122,6 @@ docker run -d --name drop-worker --restart unless-stopped --env-file .env -e DAT
 向 GitHub 仓库推送任意 tag 后，发布 Docker 镜像工作流会自动构建并推送 linux/amd64 和 linux/arm64 多架构镜像到 Docker Hub。每个 tag 会生成同名镜像标签，同时更新 latest 标签。
 
 首次使用前，在仓库 Settings → Secrets and variables → Actions 中配置 Repository variable DOCKERHUB_USERNAME 和 Repository secret DOCKERHUB_TOKEN。推送 v0.1.0 后，镜像地址为 docker.io/<DOCKERHUB_USERNAME>/drop-worker:v0.1.0。
-
-## Linux systemd
-
-仓库提供 [deploy/drop-worker.service](../deploy/drop-worker.service) 示例。将项目安装到 /opt/drop-worker，创建专用 drop-worker 系统用户，准备 .env 并完成生产构建后，再安装和启用该服务。服务升级时先停止服务，完成依赖安装和构建，再重新启动并检查日志。
 
 ## 备份与恢复
 
@@ -311,7 +306,7 @@ cf:dry-run 会构建并检查本机 wrangler.jsonc，但不会上传；cf:deploy
 
 ### Cloudflare 专用 GitHub Actions 自动部署
 
-仓库的 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) 是为 Cloudflare Worker 定制的发布流水线。它生成 Wrangler 生产配置，应用 D1 或外部 MySQL/PostgreSQL 迁移，配置 R2 直传 CORS，并通过 Wrangler 发布 Worker；它不会构建或发布本地 Node.js、Docker Compose、Docker Hub 或 systemd 部署。
+仓库的 [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) 是为 Cloudflare Worker 定制的发布流水线。它生成 Wrangler 生产配置，应用 D1 或外部 MySQL/PostgreSQL 迁移，配置 R2 直传 CORS，并通过 Wrangler 发布 Worker；它不会构建或发布本地 Node.js、Docker Compose 或 Docker Hub 部署。
 
 Pull Request 只使用 `wrangler.example.jsonc` 执行构建、类型检查、Lint 和测试，不会读取生产配置，也不会触发部署。代码 push 到 `main` 后，部署任务才会从 GitHub `production` Environment 读取配置；验证全部通过后生成临时 `wrangler.jsonc`，完成数据库迁移、Worker Secret 同步和 Cloudflare Worker 发布。
 
