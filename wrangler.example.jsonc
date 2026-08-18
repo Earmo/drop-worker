@@ -54,6 +54,8 @@
   "vars": {
     // sqlite 使用上面的 D1；mysql/postgres 使用 HYPERDRIVE。
     "DATABASE_DRIVER": "sqlite",
+    // r2 使用上面的 FILES 绑定；s3 使用下方 S3_* 配置并应删除未使用的 R2 绑定。
+    "BLOB_DRIVER": "r2",
     // 认证模式；smtp-otp 表示使用邮箱一次性验证码登录。
     "AUTH_MODE": "smtp-otp",
     // 单实例最大存储空间，单位为字节。
@@ -68,6 +70,16 @@
     "R2_BUCKET_NAME": "drop-worker-files",
     // 可选的公开 R2 自定义域名；配置后下载会在权限校验后重定向到该地址。
     "R2_PUBLIC_URL": "https://drop-files.example.com",
+    // BLOB_DRIVER=s3 时使用与 Node.js 服务端相同的 S3 兼容配置。
+    "S3_ENDPOINT": "https://s3.example.com",
+    "S3_REGION": "us-east-1",
+    "S3_BUCKET": "drop-worker",
+    "S3_PREFIX": "drop-worker/",
+    "S3_FORCE_PATH_STYLE": "false",
+    "S3_ALLOW_INSECURE": "false",
+    // 留空、AES256 或 aws:kms；aws:kms 同时要求 S3_KMS_KEY_ID。
+    "S3_SERVER_SIDE_ENCRYPTION": "",
+    "S3_KMS_KEY_ID": "",
     // 唯一允许登录的个人邮箱，也用于接收验证码。
     "OWNER_EMAIL": "you@example.com",
     // 验证码邮件显示的发件人名称。
@@ -82,6 +94,17 @@
     "SMTP_FROM": "noreply@example.com",
     // SMTP 连接超时时间，单位为毫秒。
     "SMTP_TIMEOUT_MS": "15000"
+  },
+  // Secret 只声明名称以生成类型，值仍通过 wrangler secret put 或部署流水线注入。
+  // 切换到 s3 时，把最后两个 R2 名称替换为 S3_ACCESS_KEY_ID、S3_SECRET_ACCESS_KEY。
+  "secrets": {
+    "required": [
+      "AUTH_SESSION_SECRET",
+      "SMTP_USERNAME",
+      "SMTP_PASSWORD",
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY"
+    ]
   },
   // 定时任务配置；17 * * * * 表示每小时执行一次计划清理任务。
   "triggers": {

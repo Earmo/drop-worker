@@ -25,16 +25,30 @@ function requireOneOf(name, allowed, fallback) {
 const outputPath = path.resolve(process.argv[2] || "wrangler.jsonc");
 const workerName = requireValue("WORKER_NAME", "drop-worker");
 const databaseDriver = requireOneOf("DATABASE_DRIVER", ["sqlite", "mysql", "postgres"], "sqlite");
+const blobDriver = requireOneOf("BLOB_DRIVER", ["r2", "s3"], "r2");
 const databaseName = readValue("D1_DATABASE_NAME", workerName);
 const databaseId = readValue("D1_DATABASE_ID");
 const hyperdriveId = readValue("HYPERDRIVE_ID");
-const bucketName = requireValue("R2_BUCKET_NAME", `${workerName}-files`);
-const r2AccountId = requireValue("R2_ACCOUNT_ID");
+const r2BucketName = blobDriver === "r2" ? requireValue("R2_BUCKET_NAME", `${workerName}-files`) : "";
+const r2AccountId = blobDriver === "r2" ? requireValue("R2_ACCOUNT_ID") : "";
+const s3EndpointValue = blobDriver === "s3" ? readValue("S3_ENDPOINT") : "";
+const s3Endpoint = s3EndpointValue ? new URL(s3EndpointValue) : null;
+const s3Region = blobDriver === "s3" ? requireValue("S3_REGION", "us-east-1") : "";
+const s3Bucket = blobDriver === "s3" ? requireValue("S3_BUCKET") : "";
+const s3Prefix = blobDriver === "s3" ? requireValue("S3_PREFIX", "drop-worker/") : "";
+const s3ForcePathStyle = blobDriver === "s3"
+  ? requireOneOf("S3_FORCE_PATH_STYLE", ["true", "false"], "false")
+  : "false";
+const s3AllowInsecure = blobDriver === "s3"
+  ? requireOneOf("S3_ALLOW_INSECURE", ["true", "false"], "false")
+  : "false";
+const s3ServerSideEncryption = blobDriver === "s3" ? readValue("S3_SERVER_SIDE_ENCRYPTION") : "";
+const s3KmsKeyId = blobDriver === "s3" ? readValue("S3_KMS_KEY_ID") : "";
 const ownerEmail = requireValue("OWNER_EMAIL");
 const authFromName = requireValue("AUTH_FROM_NAME", workerName);
 const maxStorageBytes = requireValue("MAX_STORAGE_BYTES", "10737418240");
 const publicUrl = requireValue("PUBLIC_URL");
-const r2PublicUrlValue = readValue("R2_PUBLIC_URL");
+const r2PublicUrlValue = blobDriver === "r2" ? readValue("R2_PUBLIC_URL") : "";
 const r2PublicUrl = r2PublicUrlValue ? new URL(r2PublicUrlValue) : null;
 const sharingEnabled = requireOneOf("SHARING_ENABLED", ["true", "false"], "true");
 const smtpHost = readValue("SMTP_HOST");
@@ -52,6 +66,26 @@ if (databaseDriver !== "sqlite" && !uuidPattern.test(hyperdriveId)) {
 }
 if (!/^\d+$/.test(maxStorageBytes) || BigInt(maxStorageBytes) <= 0n) {
   throw new Error("MAX_STORAGE_BYTES 必须是正整数");
+}
+if (s3Endpoint && !["https:", "http:"].includes(s3Endpoint.protocol)) {
+  throw new Error("S3_ENDPOINT 必须使用 HTTP 或 HTTPS");
+}
+if (s3Endpoint?.protocol === "http:" && s3AllowInsecure !== "true") {
+  throw new Error("HTTP S3_ENDPOINT 必须显式设置 S3_ALLOW_INSECURE=true");
+}
+const normalizedS3Prefix = s3Prefix.replace(/^\/+|\/+$/g, "");
+if (blobDriver === "s3" && (
+  !normalizedS3Prefix
+  || normalizedS3Prefix.includes("..")
+  || !/^[a-zA-Z0-9/_-]+$/.test(normalizedS3Prefix)
+)) {
+  throw new Error("S3_PREFIX 无效");
+}
+if (s3ServerSideEncryption && !["AES256", "aws:kms"].includes(s3ServerSideEncryption)) {
+  throw new Error("S3_SERVER_SIDE_ENCRYPTION 只能是 AES256 或 aws:kms");
+}
+if (s3ServerSideEncryption === "aws:kms" && !s3KmsKeyId) {
+  throw new Error("S3_SERVER_SIDE_ENCRYPTION=aws:kms 时必须配置 S3_KMS_KEY_ID");
 }
 if (r2PublicUrl && (
   r2PublicUrl.protocol !== "https:"
@@ -101,21 +135,39 @@ const config = {
           },
         ],
       }),
-  r2_buckets: [
-    {
-      binding: "FILES",
-      bucket_name: bucketName,
-    },
-  ],
+  ...(blobDriver === "r2"
+    ? {
+        r2_buckets: [
+          {
+            binding: "FILES",
+            bucket_name: r2BucketName,
+          },
+        ],
+      }
+    : {}),
   vars: {
     DATABASE_DRIVER: databaseDriver,
+    BLOB_DRIVER: blobDriver,
     AUTH_MODE: "smtp-otp",
     MAX_STORAGE_BYTES: maxStorageBytes,
     PUBLIC_URL: publicUrl,
     SHARING_ENABLED: sharingEnabled,
-    R2_ACCOUNT_ID: r2AccountId,
-    R2_BUCKET_NAME: bucketName,
-    ...(r2PublicUrl ? { R2_PUBLIC_URL: r2PublicUrl.toString() } : {}),
+    ...(blobDriver === "r2"
+      ? {
+          R2_ACCOUNT_ID: r2AccountId,
+          R2_BUCKET_NAME: r2BucketName,
+          ...(r2PublicUrl ? { R2_PUBLIC_URL: r2PublicUrl.toString() } : {}),
+        }
+      : {
+          ...(s3Endpoint ? { S3_ENDPOINT: s3Endpoint.toString() } : {}),
+          S3_REGION: s3Region,
+          S3_BUCKET: s3Bucket,
+          S3_PREFIX: `${normalizedS3Prefix}/`,
+          S3_FORCE_PATH_STYLE: s3ForcePathStyle,
+          S3_ALLOW_INSECURE: s3AllowInsecure,
+          ...(s3ServerSideEncryption ? { S3_SERVER_SIDE_ENCRYPTION: s3ServerSideEncryption } : {}),
+          ...(s3KmsKeyId ? { S3_KMS_KEY_ID: s3KmsKeyId } : {}),
+        }),
     OWNER_EMAIL: ownerEmail,
     AUTH_FROM_NAME: authFromName,
     SMTP_HOST: smtpHost,
@@ -123,6 +175,17 @@ const config = {
     SMTP_SECURE: smtpSecure,
     SMTP_FROM: smtpFrom,
     SMTP_TIMEOUT_MS: smtpTimeoutMs,
+  },
+  // required 只声明生产 Worker 应具备的 Secret 名称；真实值由部署步骤安全注入。
+  secrets: {
+    required: [
+      "AUTH_SESSION_SECRET",
+      "SMTP_USERNAME",
+      "SMTP_PASSWORD",
+      ...(blobDriver === "r2"
+        ? ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"]
+        : ["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"]),
+    ],
   },
   triggers: {
     crons: ["17 * * * *"],
@@ -141,22 +204,27 @@ const config = {
 
 await writeFile(outputPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 const corsPath = path.join(path.dirname(outputPath), "r2-cors.json");
-await writeFile(corsPath, `${JSON.stringify({
-  rules: [
-    {
-      allowed: {
-        origins: [new URL(publicUrl).origin],
-        methods: ["GET", "HEAD", "PUT"],
-        headers: ["content-type", "range"],
+if (blobDriver === "r2") {
+  await writeFile(corsPath, `${JSON.stringify({
+    rules: [
+      {
+        allowed: {
+          origins: [new URL(publicUrl).origin],
+          methods: ["GET", "HEAD", "PUT"],
+          headers: ["content-type", "range"],
+        },
+        exposeHeaders: ["accept-ranges", "content-disposition", "content-length", "content-range", "etag"],
+        maxAgeSeconds: 3_600,
       },
-      exposeHeaders: ["accept-ranges", "content-disposition", "content-length", "content-range", "etag"],
-      maxAgeSeconds: 3_600,
-    },
-  ],
-}, null, 2)}\n`, "utf8");
+    ],
+  }, null, 2)}\n`, "utf8");
+}
 if (process.env.GITHUB_OUTPUT) {
   await appendFile(process.env.GITHUB_OUTPUT, `database_driver=${databaseDriver}\n`, "utf8");
-  await appendFile(process.env.GITHUB_OUTPUT, `r2_bucket_name=${bucketName}\n`, "utf8");
-  await appendFile(process.env.GITHUB_OUTPUT, `r2_cors_config=${corsPath}\n`, "utf8");
+  await appendFile(process.env.GITHUB_OUTPUT, `blob_driver=${blobDriver}\n`, "utf8");
+  if (blobDriver === "r2") {
+    await appendFile(process.env.GITHUB_OUTPUT, `r2_bucket_name=${r2BucketName}\n`, "utf8");
+    await appendFile(process.env.GITHUB_OUTPUT, `r2_cors_config=${corsPath}\n`, "utf8");
+  }
 }
 console.log(`已生成 Wrangler 部署配置：${path.basename(outputPath)}`);

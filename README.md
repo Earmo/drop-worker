@@ -13,7 +13,7 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 
 应用支持两种正式部署方式：
 
-- Cloudflare：Workers Static Assets + Worker + D1 或 Hyperdrive(MySQL/PostgreSQL) + R2，使用自定义 SMTP 邮箱验证码。
+- Cloudflare：Workers Static Assets + Worker + D1 或 Hyperdrive(MySQL/PostgreSQL) + R2/S3 兼容对象存储，使用自定义 SMTP 邮箱验证码。
 - 本地自托管：单个 Node.js 进程，可选择 SQLite/MySQL/PostgreSQL 与本地文件系统/S3 兼容存储。
 
 ## 环境要求
@@ -108,15 +108,22 @@ docker compose up -d --build
 
 ### 使用 Docker Hub 镜像
 
-也可以直接拉取已发布的多架构镜像，不需要在本地构建：
+也可以直接拉取已发布的多架构镜像，不需要在本地构建。仓库提供了
+[`examples/compose/dockerhub.yaml`](examples/compose/dockerhub.yaml) 示例：
 
 ```powershell
 Copy-Item .env.example .env
-docker pull earmo/drop-worker:latest
-docker run -d --name drop-worker --restart unless-stopped --env-file .env -e DATA_DIR=/app/data -p 3000:3000 -v drop-worker-data:/app/data earmo/drop-worker:latest
+docker compose --env-file .env -f examples/compose/dockerhub.yaml pull
+docker compose --env-file .env -f examples/compose/dockerhub.yaml up -d
 ```
 
-默认访问地址为 `http://localhost:3000`。如需更换主机端口，修改 `-p` 左侧的端口号；应用数据保存在 `drop-worker-data` 命名卷中。
+默认访问地址为 `http://localhost:3000`。如需更换主机端口，设置 `HOST_PORT`；如需固定镜像版本，设置 `DROP_WORKER_TAG`，例如 `DROP_WORKER_TAG=v0.1.0`。应用数据保存在 `drop-worker-data` 命名卷中。
+
+仍可直接使用 Docker CLI 运行镜像：
+
+```powershell
+docker run -d --name drop-worker --restart unless-stopped --env-file .env -e DATA_DIR=/app/data -p 3000:3000 -v drop-worker-data:/app/data earmo/drop-worker:latest
+```
 
 ### 自动发布 Docker 镜像
 
@@ -195,24 +202,29 @@ pnpm admin -- remote-restore ./backups/cloudflare
 Copy-Item wrangler.example.jsonc wrangler.jsonc
 ```
 
-模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1/Hyperdrive、R2、SMTP、变量、定时任务和可观测性配置。
+模板中的 JSONC 中文注释会逐项说明 Worker 入口、静态资源、D1/Hyperdrive、R2/S3、SMTP、变量、定时任务和可观测性配置。
 
-然后选择 `DATABASE_DRIVER=sqlite|mysql|postgres`。SQLite 替换 `<D1_DATABASE_ID>`；MySQL/PostgreSQL 则替换 `<HYPERDRIVE_CONFIG_ID>`，并可删除未使用的另一类数据库绑定。随后填写 R2 桶名、个人邮箱和发件地址。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
+然后选择 `DATABASE_DRIVER=sqlite|mysql|postgres`。SQLite 替换 `<D1_DATABASE_ID>`；MySQL/PostgreSQL 则替换 `<HYPERDRIVE_CONFIG_ID>`，并可删除未使用的另一类数据库绑定。对象存储默认使用 `BLOB_DRIVER=r2` 和 `FILES` 绑定；改为 `BLOB_DRIVER=s3` 时，删除 `r2_buckets`，填写与本地服务端相同的 `S3_*` 配置。真实的 `wrangler.jsonc` 已被 `.gitignore` 忽略，不要强制提交它；它包含部署资源 ID 和个人邮箱等实例信息。`wrangler.example.jsonc` 只保留可公开的配置结构和占位值。
 
-`wrangler.jsonc` 声明了所选数据库绑定、R2、静态资源、每小时清理任务和可观测性。首次部署前：
+`wrangler.jsonc` 声明了所选数据库绑定、对象存储、静态资源、每小时清理任务和可观测性。首次部署前：
 
 1. 配置 `OWNER_EMAIL`、`AUTH_FROM_NAME`、`SMTP_HOST`、`SMTP_PORT`、`SMTP_SECURE`、`SMTP_FROM` 和 `SMTP_TIMEOUT_MS`。
 2. 使用 `wrangler secret put SMTP_USERNAME` 与 `wrangler secret put SMTP_PASSWORD` 保存 SMTP 凭据。
-3. 为目标 R2 桶创建“对象读写”S3 API Token，把 Access Key ID 和 Secret Access Key 分别保存为 `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY` Worker Secret，并在变量中配置 `R2_ACCOUNT_ID` 与 `R2_BUCKET_NAME`。
+3. R2 模式为目标桶创建“对象读写”S3 API Token，并配置 `R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`、`R2_ACCOUNT_ID` 与 `R2_BUCKET_NAME`；S3 模式则配置 `S3_ACCESS_KEY_ID`、`S3_SECRET_ACCESS_KEY` 以及 `S3_REGION`、`S3_BUCKET` 等变量。
 4. 使用 `wrangler secret put AUTH_SESSION_SECRET` 设置至少 32 字节的随机会话密钥。
 5. 在 Worker 的 Custom Domains 中绑定自己的域名或子域名，并把 `PUBLIC_URL` 设为该 HTTPS 地址。
-6. 为 R2 桶配置只允许 `PUBLIC_URL` 来源执行 `GET`、`HEAD`、`PUT`，允许 `Range`，并暴露下载响应头的 CORS。GitHub Actions 会自动生成并应用该配置；手工部署可参考下方命令。
+6. 仅 R2 直传模式需要为桶配置 CORS：允许 `PUBLIC_URL` 来源执行 `GET`、`HEAD`、`PUT`，允许 `Range`，并暴露下载响应头。GitHub Actions 会自动生成并应用该配置；S3 模式的分片经过 Worker 代理，不需要浏览器访问桶。
 7. 生成类型并应用所选数据库的迁移。D1 使用 Wrangler；MySQL/PostgreSQL 使用现有管理命令直连数据库迁移。
 8. 构建并部署 Worker。
 
 ```powershell
 "你的 R2 Access Key ID" | npx wrangler secret put R2_ACCESS_KEY_ID --config wrangler.jsonc
 "你的 R2 Secret Access Key" | npx wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.jsonc
+# BLOB_DRIVER=s3 时改为：
+"你的 S3 Access Key ID" | npx wrangler secret put S3_ACCESS_KEY_ID --config wrangler.jsonc
+"你的 S3 Secret Access Key" | npx wrangler secret put S3_SECRET_ACCESS_KEY --config wrangler.jsonc
+# 使用临时凭据时还需执行：
+"你的 S3 Session Token" | npx wrangler secret put S3_SESSION_TOKEN --config wrangler.jsonc
 npm run cf:types
 # DATABASE_DRIVER=sqlite
 npx wrangler d1 migrations apply drop-worker --remote --config wrangler.jsonc
@@ -223,7 +235,29 @@ npm run cf:deploy
 
 MySQL/PostgreSQL Worker 部署必须在 Cloudflare 创建对应的 Hyperdrive 配置，并以 `HYPERDRIVE` 绑定注入。应用使用绑定内的临时连接信息：PostgreSQL 通过 `pg`，MySQL 通过启用 `disableEval` 的 `mysql2` 连接。每个 API/Cron 任务创建并关闭一个客户端，实际连接池由 Hyperdrive 管理。数据库版本要求与自托管一致，迁移用的 `DATABASE_URL` 只提供给管理命令或 CI，不写入 Worker 变量。
 
-生产环境上传使用 16 MiB 分片和四路并发，浏览器通过 15 分钟有效的预签名 URL 直接写入私有 R2 桶；Worker 只负责登录校验、配额、签名、分片确认和完成上传。未配置 R2 S3 API 凭据时会回退到 Worker 代理上传，便于本地开发，但生产部署流程会把缺少凭据视为配置错误。
+生产环境上传使用 16 MiB 分片和四路并发。R2 模式下，浏览器通过 15 分钟有效的预签名 URL 直接写入私有桶；未配置 R2 S3 API 凭据时会回退到 Worker 代理上传，便于本地开发，但生产部署流程会把缺少凭据视为配置错误。通用 S3 模式与 Node.js 服务端共用 AWS SDK v3 adapter，分片由 Worker 代理到私有桶，因此必须配置静态 S3 凭据，且不启用 R2 直传与 `R2_PUBLIC_URL`。
+
+#### 腾讯云 COS S3 兼容配置示例
+
+以下配置已使用香港地域 COS 桶完成连接、列举和 multipart 健康检查。COS 的 `S3_ENDPOINT` 使用地域通用域名，桶名单独填写完整的“桶名-AppID”；不要把带桶名的访问域名直接填入 `S3_ENDPOINT`。
+
+```dotenv
+BLOB_DRIVER=s3
+S3_ENDPOINT=https://cos.ap-hongkong.myqcloud.com
+S3_REGION=ap-hongkong
+S3_BUCKET=test-hk-1301234567
+S3_PREFIX=drop-worker/
+S3_FORCE_PATH_STYLE=false
+S3_ALLOW_INSECURE=false
+```
+
+凭据通过 Secret 注入：
+
+```powershell
+"你的 COS SecretId" | npx wrangler secret put S3_ACCESS_KEY_ID --config wrangler.jsonc
+"你的 COS SecretKey" | npx wrangler secret put S3_SECRET_ACCESS_KEY --config wrangler.jsonc
+# 使用临时密钥时再设置 S3_SESSION_TOKEN
+```
 
 可选配置 `R2_PUBLIC_URL` 为 R2 桶的公开自定义域名，例如 `https://drop-files.example.com`。配置后，文件下载会先经过应用的登录或分享权限校验，再重定向到 R2 自定义域名；图片预览仍由应用受控返回。该模式不会对最终 R2 地址继续鉴权，任何拿到对象直链的人都可以访问，直到对象被删除或更换对象键。
 
@@ -279,7 +313,7 @@ SMTP 用户名和密码不会写入 `wrangler.jsonc` 或日志。`SMTP_FROM` 是
 
 ### 从本机部署 Cloudflare Worker
 
-以下命令虽然从本机执行，但部署目标仍是 Cloudflare Worker，因此生产数据使用配置中的 D1/R2；它们不属于前文的本地自托管。GitHub Actions 自动部署是额外入口，不替代这些 Wrangler 命令。仓库根目录中保留自己的、已被 Git 忽略的 `wrangler.jsonc` 后，可直接运行：
+以下命令虽然从本机执行，但部署目标仍是 Cloudflare Worker，因此生产数据使用配置中的 D1/Hyperdrive 与 R2/S3；它们不属于前文的本地自托管。GitHub Actions 自动部署是额外入口，不替代这些 Wrangler 命令。仓库根目录中保留自己的、已被 Git 忽略的 `wrangler.jsonc` 后，可直接运行：
 
 ```powershell
 npm ci
@@ -301,9 +335,18 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 | --- | --- | --- |
 | `WORKER_NAME` | Worker 名称 | `drop-worker` |
 | `DATABASE_DRIVER` | Worker 元数据驱动：`sqlite`、`mysql` 或 `postgres` | `sqlite` |
+| `BLOB_DRIVER` | Worker 对象存储驱动：`r2` 或 `s3` | `r2` |
 | `D1_DATABASE_NAME` | SQLite 模式的 D1 数据库名称 | 与 Worker 名称相同 |
 | `R2_BUCKET_NAME` | R2 桶名称 | `<WORKER_NAME>-files` |
 | `R2_PUBLIC_URL` | 可选的公开 R2 自定义下载域名 | 空，继续由 Worker 返回文件 |
+| `S3_ENDPOINT` | S3 兼容服务 endpoint；AWS S3 可留空 | 空 |
+| `S3_REGION` | S3 region | `us-east-1` |
+| `S3_BUCKET` | S3 私有桶名称 | S3 模式必填 |
+| `S3_PREFIX` | 桶内对象前缀 | `drop-worker/` |
+| `S3_FORCE_PATH_STYLE` | 是否强制 path-style 地址 | `false` |
+| `S3_ALLOW_INSECURE` | 是否显式允许 HTTP endpoint | `false` |
+| `S3_SERVER_SIDE_ENCRYPTION` | 留空、`AES256` 或 `aws:kms` | 空 |
+| `S3_KMS_KEY_ID` | KMS 密钥 ID | `aws:kms` 时必填 |
 | `MAX_STORAGE_BYTES` | 最大存储字节数 | `10737418240` |
 | `PUBLIC_URL` | 生成分享链接的可信 HTTPS 地址 | 必填 |
 | `SHARING_ENABLED` | 是否允许创建和访问分享 | `true` |
@@ -316,15 +359,18 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行验证，不会读取生�
 
 | Secret | 用途 | 要求 |
 | --- | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | Wrangler 部署、D1 迁移与 R2 CORS 配置凭据 | 必填；需要目标账号相应的 Workers、D1/Hyperdrive 与 R2 权限 |
+| `CLOUDFLARE_API_TOKEN` | Wrangler 部署、D1 迁移与可选 R2 CORS 配置凭据 | 必填；R2 模式还需相应 R2 权限 |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Account ID | 必填 |
 | `D1_DATABASE_ID` | 生产 D1 数据库 UUID | `sqlite` 模式必填 |
 | `HYPERDRIVE_ID` | 生产 Hyperdrive 配置 UUID | `mysql`/`postgres` 模式必填 |
 | `DATABASE_URL` | CI 执行 MySQL/PostgreSQL 迁移使用的直连 URL | `mysql`/`postgres` 模式必填；不会注入 Worker |
 | `OWNER_EMAIL` | 唯一允许登录并接收验证码的邮箱 | 必填 |
 | `AUTH_SESSION_SECRET` | 30 天会话签名密钥 | 必填，至少 32 字节随机值 |
-| `R2_ACCESS_KEY_ID` | R2 S3 API Access Key ID | 必填；只授予目标桶对象读写权限 |
-| `R2_SECRET_ACCESS_KEY` | R2 S3 API Secret Access Key | 必填；保存后不会发送到浏览器 |
+| `R2_ACCESS_KEY_ID` | R2 S3 API Access Key ID | R2 模式必填；只授予目标桶对象读写权限 |
+| `R2_SECRET_ACCESS_KEY` | R2 S3 API Secret Access Key | R2 模式必填；保存后不会发送到浏览器 |
+| `S3_ACCESS_KEY_ID` | 通用 S3 Access Key ID | S3 模式必填 |
+| `S3_SECRET_ACCESS_KEY` | 通用 S3 Secret Access Key | S3 模式必填 |
+| `S3_SESSION_TOKEN` | 通用 S3 临时凭据的会话令牌 | 使用临时凭据时必填 |
 | `SMTP_HOST` | 自定义 SMTP 服务器 | 必填 |
 | `SMTP_FROM` | 自定义 SMTP 实际发件地址 | 必填 |
 | `SMTP_USERNAME` | SMTP 用户名 | SMTP 模式必填 |
@@ -352,7 +398,7 @@ npm test
 - `api/`：与部署平台无关的 Hono 路由、HTTP 中间件、能力端口和共享上传传输。
 - `api/stores/`：D1、SQLite、MySQL、PostgreSQL、R2、本地文件系统与 S3 适配器。
 - `packages/contracts/`：前后端共享的 Zod 请求、响应和领域契约。
-- `worker/`：Cloudflare Worker 入口；`runtime/` 负责配置和组合，`auth/` 负责邮件认证，`storage/` 负责 R2 直传，`types/` 保存环境声明和 Wrangler 生成类型。
+- `worker/`：Cloudflare Worker 入口；`runtime/` 负责 R2/S3 配置和组合，`auth/` 负责邮件认证，`storage/` 负责 R2 直传，`types/` 保存环境声明和 Wrangler 生成类型。
 - `server/`：本地 Node.js 与管理命令入口；`runtime/` 负责配置和组合，`auth/` 负责认证，`storage/` 负责数据库迁移和可移植备份。
 - `db/`：SQLite/D1、MySQL 和 PostgreSQL 的方言 Schema。
 - `drizzle/config/`：三种数据库方言的 Drizzle Kit 生成配置。

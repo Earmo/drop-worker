@@ -21,6 +21,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
         ...process.env,
         WORKER_NAME: "drop-worker",
         DATABASE_DRIVER: "sqlite",
+        BLOB_DRIVER: "r2",
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
@@ -39,6 +40,7 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     });
 
     const config = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(config.vars.BLOB_DRIVER, "r2");
     assert.equal(config.vars.SMTP_HOST, "smtphz.qiye.163.com");
     assert.equal(config.vars.SMTP_PORT, "994");
     assert.equal(config.vars.SMTP_SECURE, "true");
@@ -46,6 +48,13 @@ test("生产配置允许 994 端口的隐式 TLS SMTP", async () => {
     assert.equal(config.vars.R2_ACCOUNT_ID, "1234567890abcdef");
     assert.equal(config.vars.R2_BUCKET_NAME, "drop-worker-files");
     assert.equal(config.vars.R2_PUBLIC_URL, "https://drop-files.example.com/");
+    assert.deepEqual(config.secrets.required, [
+      "AUTH_SESSION_SECRET",
+      "SMTP_USERNAME",
+      "SMTP_PASSWORD",
+      "R2_ACCESS_KEY_ID",
+      "R2_SECRET_ACCESS_KEY",
+    ]);
     assert.equal(config.d1_databases[0].migrations_dir, "./drizzle/sqlite");
     assert.equal(config.send_email, undefined);
     const cors = JSON.parse(await readFile(join(root, "r2-cors.json"), "utf8"));
@@ -73,6 +82,7 @@ test("GitHub Actions 空变量使用部署默认值", async () => {
         ...process.env,
         WORKER_NAME: "drop-worker",
         DATABASE_DRIVER: "sqlite",
+        BLOB_DRIVER: "r2",
         D1_DATABASE_NAME: "drop-worker",
         D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
         R2_BUCKET_NAME: "drop-worker-files",
@@ -108,6 +118,7 @@ test("生产配置拒绝非 HTTPS 的公开 R2 地址", async () => {
           ...process.env,
           WORKER_NAME: "drop-worker",
           DATABASE_DRIVER: "sqlite",
+          BLOB_DRIVER: "r2",
           D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
           R2_ACCOUNT_ID: "1234567890abcdef",
           R2_PUBLIC_URL: "http://drop-files.example.com",
@@ -135,6 +146,7 @@ test("生产配置为 PostgreSQL 生成 Hyperdrive 绑定且不保留 D1", async
         ...process.env,
         WORKER_NAME: "drop-worker",
         DATABASE_DRIVER: "postgres",
+        BLOB_DRIVER: "r2",
         D1_DATABASE_ID: "",
         HYPERDRIVE_ID: "87654321-4321-4321-4321-cba987654321",
         R2_BUCKET_NAME: "drop-worker-files",
@@ -154,6 +166,58 @@ test("生产配置为 PostgreSQL 生成 Hyperdrive 绑定且不保留 D1", async
       id: "87654321-4321-4321-4321-cba987654321",
     }]);
     assert.equal(config.d1_databases, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("生产配置支持通用 S3 且不生成 R2 绑定和 CORS 文件", async () => {
+  const root = await mkdtemp(join(tmpdir(), "drop-worker-render-"));
+  try {
+    const output = join(root, "wrangler.jsonc");
+    await execFileAsync(process.execPath, [renderScript, output], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        WORKER_NAME: "drop-worker",
+        DATABASE_DRIVER: "sqlite",
+        BLOB_DRIVER: "s3",
+        D1_DATABASE_ID: "12345678-1234-1234-1234-123456789abc",
+        R2_ACCOUNT_ID: "",
+        R2_BUCKET_NAME: "",
+        R2_PUBLIC_URL: "",
+        S3_ENDPOINT: "https://minio.example.com",
+        S3_REGION: "us-east-1",
+        S3_BUCKET: "drop-worker",
+        S3_PREFIX: "worker/files/",
+        S3_FORCE_PATH_STYLE: "true",
+        S3_ALLOW_INSECURE: "false",
+        S3_SERVER_SIDE_ENCRYPTION: "AES256",
+        PUBLIC_URL: "https://drop.example.com",
+        OWNER_EMAIL: "owner@example.com",
+        SMTP_HOST: "smtp.example.com",
+        SMTP_PORT: "587",
+        SMTP_FROM: "owner@example.com",
+      },
+    });
+
+    const config = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(config.vars.BLOB_DRIVER, "s3");
+    assert.equal(config.vars.S3_ENDPOINT, "https://minio.example.com/");
+    assert.equal(config.vars.S3_BUCKET, "drop-worker");
+    assert.equal(config.vars.S3_PREFIX, "worker/files/");
+    assert.equal(config.vars.S3_FORCE_PATH_STYLE, "true");
+    assert.equal(config.vars.S3_SERVER_SIDE_ENCRYPTION, "AES256");
+    assert.equal(config.r2_buckets, undefined);
+    assert.equal(config.vars.R2_ACCOUNT_ID, undefined);
+    assert.deepEqual(config.secrets.required, [
+      "AUTH_SESSION_SECRET",
+      "SMTP_USERNAME",
+      "SMTP_PASSWORD",
+      "S3_ACCESS_KEY_ID",
+      "S3_SECRET_ACCESS_KEY",
+    ]);
+    await assert.rejects(readFile(join(root, "r2-cors.json"), "utf8"), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -179,10 +243,14 @@ test("GitHub Actions 使用 Node 24 兼容的 Wrangler Action 并固定 CLI 版�
   assert.doesNotMatch(workflow, /cloudflare\/wrangler-action@v3/);
   assert.match(workflow, /npx wrangler@4\.118\.0 d1 migrations apply DB --remote --config wrangler\.jsonc/);
   assert.match(workflow, /r2 bucket cors set "\$R2_BUCKET_NAME" --file/);
+  assert.match(workflow, /blob_driver == 'r2'/);
+  assert.match(workflow, /BLOB_DRIVER: \$\{\{ vars\.BLOB_DRIVER \}\}/);
   assert.match(workflow, /R2_PUBLIC_URL: \$\{\{ vars\.R2_PUBLIC_URL \}\}/);
   assert.equal((workflow.match(/command: deploy --config wrangler\.jsonc --keep-vars/g) || []).length, 1);
   assert.match(workflow, /R2_ACCESS_KEY_ID/);
   assert.match(workflow, /R2_SECRET_ACCESS_KEY/);
+  assert.match(workflow, /S3_ACCESS_KEY_ID/);
+  assert.match(workflow, /S3_SECRET_ACCESS_KEY/);
   assert.match(workflow, /CLOUDFLARE_API_TOKEN 具备目标账号和 D1 数据库的 Edit 权限/);
   assert.equal((workflow.match(/wranglerVersion: "4\.118\.0"/g) || []).length, 1);
 });

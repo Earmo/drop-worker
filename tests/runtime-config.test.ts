@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { S3BlobStore } from "../api/stores/s3";
 import { loadNodeRuntimeConfig } from "../server/runtime/config";
 import { loadCloudflareRuntimeConfig } from "../worker/runtime/config";
+import { createCloudflareRuntime } from "../worker/runtime/services";
 
 const NODE_ENV_KEYS = [
   "AUTH_MODE",
@@ -90,6 +92,7 @@ test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭�
   } as unknown as Env);
   assert.equal(config.ownerEmail, "owner@example.com");
   assert.equal(config.databaseDriver, "sqlite");
+  assert.equal(config.blobDriver, "r2");
   assert.equal(config.quotaBytes, 2048);
   assert.equal(config.directUpload?.bucketName, "bucket");
 
@@ -108,5 +111,45 @@ test("Cloudflare 运行时配置集中校验公开地址、Secret 和直传凭�
   assert.throws(
     () => loadCloudflareRuntimeConfig({ ...baseEnv, DATABASE_DRIVER: "unsupported" } as unknown as Env),
     /DATABASE_DRIVER/,
+  );
+  assert.throws(
+    () => loadCloudflareRuntimeConfig({ ...baseEnv, BLOB_DRIVER: "local" } as unknown as Env),
+    /BLOB_DRIVER/,
+  );
+});
+
+test("Cloudflare S3 模式复用通用 adapter 且不要求 R2 绑定", async () => {
+  const env = {
+    DATABASE_DRIVER: "sqlite",
+    BLOB_DRIVER: "s3",
+    AUTH_MODE: "development",
+    AUTH_SESSION_SECRET: "a-secure-session-secret-that-is-long-enough",
+    PUBLIC_URL: "https://drop.example.com",
+    SHARING_ENABLED: "true",
+    DB: {},
+    S3_ENDPOINT: "https://s3.example.com",
+    S3_REGION: "us-east-1",
+    S3_BUCKET: "drop-worker",
+    S3_PREFIX: "drop-worker/",
+    S3_FORCE_PATH_STYLE: "true",
+    S3_ACCESS_KEY_ID: "access-key",
+    S3_SECRET_ACCESS_KEY: "secret-key",
+  } as unknown as Env;
+
+  const config = loadCloudflareRuntimeConfig(env);
+  assert.equal(config.blobDriver, "s3");
+  assert.equal(config.directUpload, undefined);
+  assert.equal(config.publicFilesUrl, undefined);
+
+  const runtime = await createCloudflareRuntime(env);
+  try {
+    assert.ok(runtime.services.blobs instanceof S3BlobStore);
+  } finally {
+    await runtime.close();
+  }
+
+  assert.throws(
+    () => loadCloudflareRuntimeConfig({ ...env, S3_SECRET_ACCESS_KEY: "" } as unknown as Env),
+    /S3_ACCESS_KEY_ID 与 S3_SECRET_ACCESS_KEY/,
   );
 });

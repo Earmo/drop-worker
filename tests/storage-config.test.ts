@@ -57,7 +57,7 @@ test("S3 配置支持默认凭据链、静态临时凭据与加密选项", () =>
     staticCredentials.close();
 
     process.env.S3_SERVER_SIDE_ENCRYPTION = "aws:kms";
-    delete process.env.S3_KMS_KEY_ID;
+    Reflect.deleteProperty(process.env, "S3_KMS_KEY_ID");
     assert.throws(() => createS3BlobStoreFromEnv(), /S3_KMS_KEY_ID/);
     process.env.S3_KMS_KEY_ID = "alias/drop-worker";
     const kms = createS3BlobStoreFromEnv();
@@ -92,6 +92,19 @@ test("S3 配置拒绝越界前缀、半套凭据和未确认的明文 endpoint",
     console.warn = originalWarn;
     restore();
   }
+});
+
+test("S3 adapter 可以从 Worker 风格环境对象读取同一组配置", () => {
+  const store = createS3BlobStoreFromEnv({
+    S3_ENDPOINT: "https://objects.example.com",
+    S3_REGION: "auto",
+    S3_BUCKET: "drop-worker",
+    S3_PREFIX: "worker/",
+    S3_FORCE_PATH_STYLE: "true",
+    S3_ACCESS_KEY_ID: "worker-access-key",
+    S3_SECRET_ACCESS_KEY: "worker-secret-key",
+  });
+  store.close();
 });
 
 test("关系型配置校验驱动、连接池和 TLS 默认值", async () => {

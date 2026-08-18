@@ -2,6 +2,7 @@ import { EmailOtpAuth } from "../../api/auth";
 import { createAppContext } from "../../api/context";
 import { createD1MetadataStore, R2BlobStore } from "../../api/stores/cloudflare";
 import type { AppContext, AuthProvider, MetadataStore } from "../../api/platform";
+import { createS3BlobStoreFromEnv, S3BlobStore } from "../../api/stores/s3";
 import { WorkerSmtpMailSender } from "../auth/smtp";
 import { R2DirectUploadService } from "../storage/r2-direct-uploads";
 import { openWorkerRelationalMetadataStore } from "../storage/relational-metadata";
@@ -44,11 +45,22 @@ export async function createCloudflareRuntime(env: Env): Promise<CloudflareRunti
         new WorkerSmtpMailSender(config.smtp),
       )
     : null;
-  if (!env.FILES) {
-    await closeMetadata();
-    throw new Error("Worker 必须配置 FILES R2 绑定");
+  let blobs: R2BlobStore | S3BlobStore;
+  if (config.blobDriver === "r2") {
+    if (!env.FILES) {
+      await closeMetadata();
+      throw new Error("Worker R2 模式必须配置 FILES 绑定");
+    }
+    blobs = new R2BlobStore(env.FILES);
+  } else {
+    try {
+      // 与 Node.js 运行时共用 S3 adapter，但凭据来自 Worker Env 而不是 process.env。
+      blobs = createS3BlobStoreFromEnv(env);
+    } catch (error) {
+      await closeMetadata();
+      throw error;
+    }
   }
-  const blobs = new R2BlobStore(env.FILES);
   const auth: AuthProvider = emailAuth ?? {
     mode: "development",
     resolveIdentity: async (request) => {
@@ -84,5 +96,11 @@ export async function createCloudflareRuntime(env: Env): Promise<CloudflareRunti
       resolveClientAddress: (request) => request.headers.get("cf-connecting-ip") || "unknown",
     },
   });
-  return { services, close: closeMetadata };
+  return {
+    services,
+    close: async () => {
+      if (blobs instanceof S3BlobStore) blobs.close();
+      await closeMetadata();
+    },
+  };
 }

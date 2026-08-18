@@ -20,6 +20,21 @@ type S3StoreConfig = {
   kmsKeyId?: string;
 };
 
+/** Node.js 与 Worker 共用的 S3 配置来源；Worker 会传入绑定环境，Node.js 默认读取 process.env。 */
+export type S3Environment = {
+  S3_ENDPOINT?: string;
+  S3_REGION?: string;
+  S3_BUCKET?: string;
+  S3_PREFIX?: string;
+  S3_FORCE_PATH_STYLE?: string;
+  S3_ALLOW_INSECURE?: string;
+  S3_ACCESS_KEY_ID?: string;
+  S3_SECRET_ACCESS_KEY?: string;
+  S3_SESSION_TOKEN?: string;
+  S3_SERVER_SIDE_ENCRYPTION?: string;
+  S3_KMS_KEY_ID?: string;
+};
+
 function objectPrefix(value: string | undefined): string {
   const normalized = (value || "drop-worker").trim().replace(/^\/+|\/+$/g, "");
   if (!normalized || normalized.includes("..") || !/^[a-zA-Z0-9/_-]+$/.test(normalized)) {
@@ -33,24 +48,24 @@ function safeObjectKey(prefix: string, key: string): string {
   return `${prefix}${key}`;
 }
 
-function encryptionConfig(): Pick<S3StoreConfig, "serverSideEncryption" | "kmsKeyId"> {
-  const value = process.env.S3_SERVER_SIDE_ENCRYPTION?.trim();
+function encryptionConfig(env: S3Environment): Pick<S3StoreConfig, "serverSideEncryption" | "kmsKeyId"> {
+  const value = env.S3_SERVER_SIDE_ENCRYPTION?.trim();
   if (!value) return {};
   if (value === "AES256") return { serverSideEncryption: "AES256" };
   if (value === "aws:kms") {
-    const kmsKeyId = process.env.S3_KMS_KEY_ID?.trim();
+    const kmsKeyId = env.S3_KMS_KEY_ID?.trim();
     if (!kmsKeyId) throw new Error("S3_SERVER_SIDE_ENCRYPTION=aws:kms 时必须配置 S3_KMS_KEY_ID");
     return { serverSideEncryption: "aws:kms", kmsKeyId };
   }
   throw new Error("S3_SERVER_SIDE_ENCRYPTION 只能是 AES256 或 aws:kms");
 }
 
-function s3Endpoint(): string | undefined {
-  const value = process.env.S3_ENDPOINT?.trim();
+function s3Endpoint(env: S3Environment): string | undefined {
+  const value = env.S3_ENDPOINT?.trim();
   if (!value) return undefined;
   const endpoint = new URL(value);
   if (endpoint.protocol !== "https:" && endpoint.protocol !== "http:") throw new Error("S3_ENDPOINT 必须使用 HTTP 或 HTTPS");
-  if (endpoint.protocol === "http:" && process.env.S3_ALLOW_INSECURE !== "true") {
+  if (endpoint.protocol === "http:" && env.S3_ALLOW_INSECURE !== "true") {
     throw new Error("HTTP S3_ENDPOINT 必须显式设置 S3_ALLOW_INSECURE=true");
   }
   if (endpoint.protocol === "http:") {
@@ -59,36 +74,41 @@ function s3Endpoint(): string | undefined {
   return endpoint.toString();
 }
 
-function staticCredentials() {
-  const accessKeyId = process.env.S3_ACCESS_KEY_ID?.trim();
-  const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY?.trim();
+function staticCredentials(env: S3Environment) {
+  const accessKeyId = env.S3_ACCESS_KEY_ID?.trim();
+  const secretAccessKey = env.S3_SECRET_ACCESS_KEY?.trim();
   if (!accessKeyId && !secretAccessKey) return undefined;
   if (!accessKeyId || !secretAccessKey) throw new Error("S3_ACCESS_KEY_ID 与 S3_SECRET_ACCESS_KEY 必须同时配置");
   return {
     accessKeyId,
     secretAccessKey,
-    sessionToken: process.env.S3_SESSION_TOKEN?.trim() || undefined,
+    sessionToken: env.S3_SESSION_TOKEN?.trim() || undefined,
   };
 }
 
-export function createS3BlobStoreFromEnv(): S3BlobStore {
-  const bucket = process.env.S3_BUCKET?.trim();
-  const region = process.env.S3_REGION?.trim();
+/**
+ * 从指定环境创建通用 S3 adapter。Node.js 可省略参数以保留默认凭据链，
+ * Worker 必须传入自己的 Env，并在组合根中保证静态凭据完整。
+ */
+export function createS3BlobStoreFromEnv(env: S3Environment = process.env): S3BlobStore {
+  const bucket = env.S3_BUCKET?.trim();
+  const region = env.S3_REGION?.trim();
   if (!bucket) throw new Error("S3 模式缺少 S3_BUCKET");
   if (!region) throw new Error("S3 模式缺少 S3_REGION");
   const client = new S3Client({
     region,
-    endpoint: s3Endpoint(),
-    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
-    credentials: staticCredentials(),
+    endpoint: s3Endpoint(env),
+    forcePathStyle: env.S3_FORCE_PATH_STYLE === "true",
+    credentials: staticCredentials(env),
   });
   return new S3BlobStore(client, {
     bucket,
-    prefix: objectPrefix(process.env.S3_PREFIX),
-    ...encryptionConfig(),
+    prefix: objectPrefix(env.S3_PREFIX),
+    ...encryptionConfig(env),
   });
 }
 
+/** 使用 AWS SDK v3 实现标准 S3 multipart、范围读取和对象删除能力。 */
 export class S3BlobStore implements BlobStore {
   private healthyUntil = 0;
 
