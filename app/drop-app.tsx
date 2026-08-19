@@ -1015,7 +1015,7 @@ function ShareManager({
                   {share.members.slice(0, 4).map((member) => (
                     <span key={member.itemId} title={member.itemLabel}>
                       {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
-                      {member.itemLabel}
+                      <span className="share-member-label">{member.itemLabel}</span>
                     </span>
                   ))}
                   {share.members.length > 4 && <span>另有 {share.members.length - 4} 项</span>}
@@ -1117,7 +1117,10 @@ function ShareDialog({
           <div className="share-dialog-body">
             <div className="share-selection-summary">
               {items.slice(0, 4).map((item) => (
-                <span key={item.id}><TypeIcon type={item.type} />{itemDisplayLabel(item)}</span>
+                <span key={item.id} title={itemDisplayLabel(item)}>
+                  <TypeIcon type={item.type} />
+                  <span className="share-member-label">{itemDisplayLabel(item)}</span>
+                </span>
               ))}
               {items.length > 4 && <span>另有 {items.length - 4} 项</span>}
             </div>
@@ -1387,14 +1390,14 @@ function ShareEditDialog({
               {share.members.map((member) => selected.has(member.itemId) && (
                 <span key={member.itemId}>
                   {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
-                  {member.itemLabel}
+                  <span className="share-member-label" title={member.itemLabel}>{member.itemLabel}</span>
                   <button onClick={() => removeMember(member.itemId)} aria-label={`取消 ${member.itemLabel}`}><X size={12} /></button>
                 </span>
               ))}
               {[...addedMembers].map(([itemId, member]) => selected.has(itemId) && (
                 <span key={itemId}>
                   {member.type === "file" ? <File size={12} /> : <FileText size={12} />}
-                  {member.label}
+                  <span className="share-member-label" title={member.label}>{member.label}</span>
                   <button onClick={() => removeMember(itemId)} aria-label={`取消 ${member.label}`}><X size={12} /></button>
                 </span>
               ))}

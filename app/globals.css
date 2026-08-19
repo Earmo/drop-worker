@@ -1472,9 +1472,10 @@ textarea:focus-visible,
   margin-top: 8px;
 }
 
-.share-member-preview span {
+.share-member-preview > span {
   display: inline-flex;
   max-width: 180px;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   padding: 3px 6px;
@@ -1744,14 +1745,16 @@ textarea:focus-visible,
 .share-selection-summary,
 .share-current-members > div {
   display: flex;
+  min-width: 0;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.share-selection-summary span,
+.share-selection-summary > span,
 .share-current-members > div > span {
   display: inline-flex;
   max-width: 100%;
+  min-width: 0;
   min-height: 28px;
   align-items: center;
   gap: 6px;
@@ -1762,6 +1765,20 @@ textarea:focus-visible,
   background: var(--bg);
   color: var(--text-muted);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-member-preview > span > svg,
+.share-selection-summary > span > svg,
+.share-current-members > div > span > svg,
+.share-current-members > div > span > button {
+  flex: 0 0 auto;
+}
+
+.share-member-label {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
