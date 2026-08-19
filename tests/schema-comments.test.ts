@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 type TableDefinition = {
@@ -21,11 +21,17 @@ function escaped(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-test("PostgreSQL 基线为每张表和每个字段设置非空注释", async () => {
-  const baseline = await readFile(new URL("../drizzle/postgres/0000_initial-baseline.sql", import.meta.url), "utf8");
-  const comments = baseline;
+async function migrationSql(dialect: "postgres" | "mysql"): Promise<{ definitions: TableDefinition[]; comments: string }> {
+  const directory = new URL(`../drizzle/${dialect}/`, import.meta.url);
+  const files = (await readdir(directory)).filter((file) => file.endsWith(".sql")).sort();
+  const contents = await Promise.all(files.map((file) => readFile(new URL(file, directory), "utf8")));
+  return { definitions: contents.flatMap(tableDefinitions), comments: contents.join("\n") };
+}
 
-  for (const table of tableDefinitions(baseline)) {
+test("PostgreSQL 迁移为每张表和每个字段设置非空注释", async () => {
+  const { definitions, comments } = await migrationSql("postgres");
+
+  for (const table of definitions) {
     const tableName = escaped(table.name);
     assert.match(comments, new RegExp(`COMMENT ON TABLE "${tableName}" IS '[^']+';`));
     for (const column of table.columns) {
@@ -37,11 +43,10 @@ test("PostgreSQL 基线为每张表和每个字段设置非空注释", async () 
   }
 });
 
-test("MySQL 基线为每张表和每个字段设置非空注释", async () => {
-  const baseline = await readFile(new URL("../drizzle/mysql/0000_initial-baseline.sql", import.meta.url), "utf8");
-  const comments = baseline;
+test("MySQL 迁移为每张表和每个字段设置非空注释", async () => {
+  const { definitions, comments } = await migrationSql("mysql");
 
-  for (const table of tableDefinitions(baseline)) {
+  for (const table of definitions) {
     const tableName = escaped(table.name);
     const statement = new RegExp("ALTER TABLE `" + tableName + "`([\\s\\S]*?);").exec(comments)?.[1];
     assert.ok(statement, `${table.name} 缺少 ALTER TABLE 注释语句`);

@@ -68,6 +68,8 @@ export const authChallenges = pgTable("auth_challenges", {
 export const shares = pgTable("shares", {
   id: varchar("id", { length: 64 }).primaryKey(),
   ownerId: varchar("owner_id", { length: 255 }).notNull(),
+  name: text("name"),
+  // 兼容历史单项分享；集合成员关系以 share_members 为准。
   itemId: varchar("item_id", { length: 64 }).notNull(),
   tokenHash: varchar("token_hash", { length: 128 }).notNull(),
   accessMode: varchar("access_mode", { length: 16 }).notNull(),
@@ -84,6 +86,20 @@ export const shares = pgTable("shares", {
   index("idx_shares_owner_created").on(table.ownerId, table.createdAt),
   index("idx_shares_item_status").on(table.itemId, table.revokedAt, table.expiresAt),
   index("idx_shares_retention").on(table.expiresAt, table.revokedAt),
+]);
+
+export const shareMembers = pgTable("share_members", {
+  shareId: varchar("share_id", { length: 64 }).notNull(),
+  itemId: varchar("item_id", { length: 64 }).notNull(),
+  position: integer("position").notNull(),
+  addedAt: epoch("added_at").notNull(),
+  removedAt: epoch("removed_at"),
+  removalReason: varchar("removal_reason", { length: 16 }),
+  downloadCount: integer("download_count").notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.shareId, table.itemId] }),
+  index("idx_share_members_share_active").on(table.shareId, table.removedAt, table.position),
+  index("idx_share_members_item_active").on(table.itemId, table.removedAt),
 ]);
 
 export const shareAttempts = pgTable("share_attempts", {

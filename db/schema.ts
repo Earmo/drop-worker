@@ -87,6 +87,8 @@ export const shares = sqliteTable(
   {
     id: text("id").primaryKey(),
     ownerId: text("owner_id").notNull(),
+    name: text("name"),
+    // 兼容历史单项分享；集合成员关系以 share_members 为准。
     itemId: text("item_id").notNull(),
     tokenHash: text("token_hash").notNull(),
     accessMode: text("access_mode", { enum: ["public", "code"] }).notNull(),
@@ -104,6 +106,24 @@ export const shares = sqliteTable(
     index("idx_shares_owner_created").on(table.ownerId, table.createdAt),
     index("idx_shares_item_status").on(table.itemId, table.revokedAt, table.expiresAt),
     index("idx_shares_retention").on(table.expiresAt, table.revokedAt),
+  ],
+);
+
+export const shareMembers = sqliteTable(
+  "share_members",
+  {
+    shareId: text("share_id").notNull(),
+    itemId: text("item_id").notNull(),
+    position: integer("position").notNull(),
+    addedAt: integer("added_at").notNull(),
+    removedAt: integer("removed_at"),
+    removalReason: text("removal_reason", { enum: ["manual", "trash"] }),
+    downloadCount: integer("download_count").notNull().default(0),
+  },
+  (table) => [
+    primaryKey({ columns: [table.shareId, table.itemId] }),
+    index("idx_share_members_share_active").on(table.shareId, table.removedAt, table.position),
+    index("idx_share_members_item_active").on(table.itemId, table.removedAt),
   ],
 );
 

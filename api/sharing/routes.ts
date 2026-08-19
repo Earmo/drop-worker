@@ -1,6 +1,9 @@
 import {
   createShareSchema,
+  updateShareSchema,
   verifyShareSchema,
+  type CreateShareInput,
+  type CreateShareResponse,
   type PublicShareContent,
 } from "../../packages/contracts";
 import { fileDownloadResponse, isPreviewableImage, publicFileRedirect } from "../download";
@@ -8,12 +11,14 @@ import { errorResponse, parseJson, type ApiApp } from "../http";
 import type { AppContext } from "../platform";
 import {
   createShareCookie,
+  activeShareMembers,
   decryptShareCode,
   encryptShareCode,
   hasShareCookie,
   keyedDigest,
   randomShareCode,
   shareStatus,
+  shareDisplayName,
   shareSummary,
   tokenForShare,
   verifyKeyedDigest,
@@ -27,8 +32,51 @@ async function resolvePublicShare(services: AppContext, token: string, now: numb
   const tokenHash = await keyedDigest(services.sharing.secret, "share-token-hash", token);
   const share = await services.metadata.shares.getShareByTokenHash(tokenHash);
   if (!share || shareStatus(share, now) !== "active") return null;
-  if (share.item.type !== "text" && share.item.type !== "file") return null;
   return share;
+}
+
+function publicFileMember(share: Awaited<ReturnType<typeof resolvePublicShare>>, itemId?: string) {
+  if (!share) return null;
+  const files = activeShareMembers(share).filter((member) => member.item.type === "file");
+  if (itemId) return files.find((member) => member.itemId === itemId) || null;
+  return files.length === 1 && activeShareMembers(share).length === 1 ? files[0]! : null;
+}
+
+async function createShareCollection(
+  services: AppContext,
+  ownerId: string,
+  input: CreateShareInput,
+): Promise<CreateShareResponse | null> {
+  const id = crypto.randomUUID();
+  const token = await tokenForShare(services.sharing.secret, id);
+  const tokenHash = await keyedDigest(services.sharing.secret, "share-token-hash", token);
+  const generatedCode = input.accessMode === "code" && !input.code ? randomShareCode() : null;
+  const code = input.accessMode === "code" ? input.code || generatedCode : null;
+  const codeHash = code
+    ? await keyedDigest(services.sharing.secret, "share-code", `${id}:${code}`)
+    : null;
+  const codeEncrypted = code ? await encryptShareCode(services.sharing.secret, id, code) : null;
+  const now = Date.now();
+  const share = await services.metadata.shares.createShare({
+    id,
+    ownerId,
+    itemIds: input.itemIds,
+    name: input.name ?? null,
+    tokenHash,
+    accessMode: input.accessMode,
+    codeHash,
+    codeEncrypted,
+    now,
+    expiresAt: now + input.expiresInSeconds * 1000,
+  });
+  if (!share) return null;
+  const url = new URL(`/s/${token}`, services.sharing.publicUrl);
+  if (code) url.hash = `code=${code}`;
+  return {
+    share: shareSummary(share, now, services.sharing.publicUrl, token, code),
+    shareUrl: url.toString(),
+    generatedCode,
+  };
 }
 
 /**
@@ -52,22 +100,26 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     ) {
       return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
     }
-    const content: PublicShareContent = share.item.type === "file"
-      ? {
-          type: "file",
-          fileName: share.item.displayName || share.item.originalName || "download",
-          mimeType: share.item.mimeType || "application/octet-stream",
-          sizeBytes: share.item.sizeBytes,
-          updatedAt: share.item.updatedAt,
-          expiresAt: share.expiresAt,
-        }
-      : {
-          type: "text",
-          content: share.item.content || "",
-          updatedAt: share.item.updatedAt,
-          expiresAt: share.expiresAt,
-        };
-    await c.env.services.metadata.shares.recordShareAccess(share.id, now, false);
+    const content: PublicShareContent = {
+      name: shareDisplayName(share),
+      expiresAt: share.expiresAt,
+      members: activeShareMembers(share).map((member) => member.item.type === "file"
+        ? {
+            id: member.itemId,
+            type: "file" as const,
+            fileName: member.item.displayName || member.item.originalName || "download",
+            mimeType: member.item.mimeType || "application/octet-stream",
+            sizeBytes: member.item.sizeBytes,
+            updatedAt: member.item.updatedAt,
+          }
+        : {
+            id: member.itemId,
+            type: "text" as const,
+            content: member.item.content || "",
+            updatedAt: member.item.updatedAt,
+          }),
+    };
+    await c.env.services.metadata.shares.recordShareAccess(share.id, now);
     c.header("cache-control", "private, no-store");
     c.header("x-robots-tag", "noindex, nofollow, noarchive");
     return c.json(content);
@@ -120,11 +172,14 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     return c.json({ verified: true, expiresAt: Math.min(share.expiresAt, now + 24 * 60 * 60 * 1000) });
   });
 
-  api.on(["GET", "HEAD"], "/api/public/shares/:token/preview", async (c) => {
+  api.on(["GET", "HEAD"], [
+    "/api/public/shares/:token/preview",
+    "/api/public/shares/:token/items/:itemId/preview",
+  ], async (c) => {
     const now = Date.now();
     const token = c.req.param("token");
     const share = await resolvePublicShare(c.env.services, token, now);
-    if (!share || share.item.type !== "file" || !share.item.objectKey || !isPreviewableImage(share.item.mimeType)) {
+    if (!share) {
       return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或不支持预览", 404);
     }
     if (
@@ -133,12 +188,16 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     ) {
       return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
     }
+    const member = publicFileMember(share, c.req.param("itemId"));
+    if (!member || !member.item.objectKey || !isPreviewableImage(member.item.mimeType)) {
+      return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或不支持预览", 404);
+    }
     const response = await fileDownloadResponse({
       request: c.req.raw,
       blobs: c.env.services.blobs,
-      objectKey: share.item.objectKey,
-      fileName: share.item.displayName || share.item.originalName || "image",
-      mimeType: share.item.mimeType,
+      objectKey: member.item.objectKey,
+      fileName: member.item.displayName || member.item.originalName || "image",
+      mimeType: member.item.mimeType,
       attachmentOnly: false,
     });
     if (!response) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
@@ -146,11 +205,14 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     return response;
   });
 
-  api.on(["GET", "HEAD"], "/api/public/shares/:token/download", async (c) => {
+  api.on(["GET", "HEAD"], [
+    "/api/public/shares/:token/download",
+    "/api/public/shares/:token/items/:itemId/download",
+  ], async (c) => {
     const now = Date.now();
     const token = c.req.param("token");
     const share = await resolvePublicShare(c.env.services, token, now);
-    if (!share || share.item.type !== "file" || !share.item.objectKey) {
+    if (!share) {
       return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
     }
     if (
@@ -159,20 +221,24 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     ) {
       return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
     }
+    const member = publicFileMember(share, c.req.param("itemId"));
+    if (!member || !member.item.objectKey) {
+      return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+    }
     const response = c.env.services.publicFilesUrl
-      ? await publicFileRedirect(c.env.services.blobs, c.env.services.publicFilesUrl, share.item.objectKey)
+      ? await publicFileRedirect(c.env.services.blobs, c.env.services.publicFilesUrl, member.item.objectKey)
       : await fileDownloadResponse({
           request: c.req.raw,
           blobs: c.env.services.blobs,
-          objectKey: share.item.objectKey,
-          fileName: share.item.displayName || share.item.originalName || "download",
-          mimeType: share.item.mimeType,
+          objectKey: member.item.objectKey,
+          fileName: member.item.displayName || member.item.originalName || "download",
+          mimeType: member.item.mimeType,
           attachmentOnly: true,
         });
     if (!response) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
     const startsDownload = !c.req.header("range");
     if (c.req.method === "GET" && startsDownload && (response.status === 200 || response.status === 206 || response.status === 307)) {
-      await c.env.services.metadata.shares.recordShareAccess(share.id, now, true);
+      await c.env.services.metadata.shares.recordShareDownload(share.id, member.itemId, now);
     }
     response.headers.set("x-robots-tag", "noindex, nofollow, noarchive");
     return response;
@@ -198,7 +264,7 @@ export function registerShareRoutes(api: ApiApp): void {
     return c.json({ shares: summaries });
   });
 
-  api.post("/api/items/:id/share", async (c) => {
+  api.post("/api/shares", async (c) => {
     if (!c.env.services.sharing.enabled) {
       return errorResponse(c.get("requestId"), "SHARING_DISABLED", "分享功能当前已关闭", 403);
     }
@@ -206,44 +272,54 @@ export function registerShareRoutes(api: ApiApp): void {
     if (!parsed.success) {
       return errorResponse(c.get("requestId"), "INVALID_SHARE", "分享设置无效", 400);
     }
-    const ownerId = c.get("identity").ownerId;
-    const item = await c.env.services.metadata.items.getItem(ownerId, c.req.param("id"));
-    if (!item || item.deletedAt !== null || (item.type !== "text" && item.type !== "file")) {
-      return errorResponse(c.get("requestId"), "NOT_FOUND", "该内容不能分享", 404);
+    const result = await createShareCollection(c.env.services, c.get("identity").ownerId, parsed.data);
+    if (!result) {
+      return errorResponse(c.get("requestId"), "SHARE_ITEMS_INVALID", "所选内容已变化或不能分享", 409);
     }
-    const id = crypto.randomUUID();
-    const token = await tokenForShare(c.env.services.sharing.secret, id);
-    const tokenHash = await keyedDigest(c.env.services.sharing.secret, "share-token-hash", token);
-    const generatedCode = parsed.data.accessMode === "code" && !parsed.data.code
-      ? randomShareCode()
-      : null;
-    const code = parsed.data.accessMode === "code" ? parsed.data.code || generatedCode : null;
-    const codeHash = code
-      ? await keyedDigest(c.env.services.sharing.secret, "share-code", `${id}:${code}`)
-      : null;
-    const codeEncrypted = code
-      ? await encryptShareCode(c.env.services.sharing.secret, id, code)
-      : null;
-    const now = Date.now();
-    const share = await c.env.services.metadata.shares.createShare({
-      id,
-      ownerId,
-      itemId: item.id,
-      tokenHash,
-      accessMode: parsed.data.accessMode,
-      codeHash,
-      codeEncrypted,
-      now,
-      expiresAt: now + parsed.data.expiresInSeconds * 1000,
+    return c.json(result, 201);
+  });
+
+  // 保留旧单项创建入口，使既有客户端自然创建单成员集合而不更换调用路径。
+  api.post("/api/items/:id/share", async (c) => {
+    if (!c.env.services.sharing.enabled) {
+      return errorResponse(c.get("requestId"), "SHARING_DISABLED", "分享功能当前已关闭", 403);
+    }
+    const payload = await parseJson(c.req.raw);
+    const parsed = createShareSchema.safeParse({
+      ...(payload && typeof payload === "object" ? payload : {}),
+      itemIds: [c.req.param("id")],
     });
-    if (!share) return errorResponse(c.get("requestId"), "NOT_FOUND", "该内容不能分享", 404);
-    const url = new URL(`/s/${token}`, c.env.services.sharing.publicUrl);
-    if (code) url.hash = `code=${code}`;
-    return c.json({
-      share: shareSummary(share, now, c.env.services.sharing.publicUrl, token, code),
-      shareUrl: url.toString(),
-      generatedCode,
-    }, 201);
+    if (!parsed.success) {
+      return errorResponse(c.get("requestId"), "INVALID_SHARE", "分享设置无效", 400);
+    }
+    const result = await createShareCollection(c.env.services, c.get("identity").ownerId, parsed.data);
+    if (!result) return errorResponse(c.get("requestId"), "NOT_FOUND", "该内容不能分享", 404);
+    return c.json(result, 201);
+  });
+
+  api.patch("/api/shares/:id", async (c) => {
+    const parsed = updateShareSchema.safeParse(await parseJson(c.req.raw));
+    if (!parsed.success) {
+      return errorResponse(c.get("requestId"), "INVALID_SHARE_UPDATE", "分享集合设置无效", 400);
+    }
+    const now = Date.now();
+    const share = await c.env.services.metadata.shares.updateShare(
+      c.get("identity").ownerId,
+      c.req.param("id"),
+      parsed.data,
+      now,
+    );
+    if (!share) {
+      return errorResponse(
+        c.get("requestId"),
+        "SHARE_UPDATE_CONFLICT",
+        "分享集合不存在、已失效或成员已经变化",
+        409,
+      );
+    }
+    const token = await tokenForShare(c.env.services.sharing.secret, share.id);
+    const code = await decryptShareCode(c.env.services.sharing.secret, share.id, share.codeEncrypted);
+    return c.json({ share: shareSummary(share, now, c.env.services.sharing.publicUrl, token, code) });
   });
 
   api.delete("/api/shares/:id", async (c) => {
@@ -253,6 +329,6 @@ export function registerShareRoutes(api: ApiApp): void {
       Date.now(),
     );
     if (!share) return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在", 404);
-    return c.json({ revoked: true });
+    return c.json({ revoked: true, terminated: true });
   });
 }

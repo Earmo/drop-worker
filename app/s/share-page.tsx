@@ -6,6 +6,7 @@ import {
   Copy,
   Download,
   File,
+  FileText,
   KeyRound,
   LoaderCircle,
   ShieldCheck,
@@ -38,10 +39,7 @@ export function PublicSharePage({ token }: { token: string }) {
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const textContent = state.kind === "content" && state.content.type === "text"
-    ? state.content.content
-    : "";
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const loadContent = useCallback(async () => {
     const response = await fetch(`/api/public/shares/${encodeURIComponent(token)}`, {
@@ -142,49 +140,61 @@ export function PublicSharePage({ token }: { token: string }) {
           </div>
         )}
 
-        {state.kind === "content" && state.content.type === "text" && (
-          <div className="shared-text-view">
-            <div className="shared-content-heading">
-              <div><p className="share-kicker">共享文本</p><h1>来自 Drop Worker</h1></div>
-              <button
-                className="icon-button"
-                onClick={() => {
-                  void navigator.clipboard.writeText(textContent).then(() => {
-                    setCopied(true);
-                    window.setTimeout(() => setCopied(false), 1400);
-                  });
-                }}
-                aria-label="复制文本"
-                title="复制文本"
-              >{copied ? <Check size={17} /> : <Copy size={17} />}</button>
+        {state.kind === "content" && (
+          <div className="shared-collection-view">
+            <div className="shared-collection-heading">
+              <p className="share-kicker">分享集合</p>
+              <h1>{state.content.name}</h1>
+              <p>{state.content.members.length} 项 · 到期于 {formatTime(state.content.expiresAt)}</p>
             </div>
-            <pre>{state.content.content}</pre>
-            <footer>更新于 {formatTime(state.content.updatedAt)} · 到期于 {formatTime(state.content.expiresAt)}</footer>
-          </div>
-        )}
-
-        {state.kind === "content" && state.content.type === "file" && (
-          <div className="shared-file-view">
-            <span className="share-stage-icon"><File size={25} /></span>
-            <p className="share-kicker">共享文件</p>
-            <h1>{state.content.fileName}</h1>
-            <p>{formatBytes(state.content.sizeBytes)} · {state.content.mimeType}</p>
-            {isPreviewableImage(state.content.mimeType) && (
-              <figure className="shared-image-preview">
-                {/* 预览必须直连带分享 Cookie 的同源接口，不能交给图片优化代理缓存。 */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/public/shares/${encodeURIComponent(token)}/preview`}
-                  alt={state.content.fileName}
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                />
-              </figure>
-            )}
-            <a className="share-primary" href={`/api/public/shares/${encodeURIComponent(token)}/download`}>
-              <Download size={18} /> 下载文件
-            </a>
-            <footer>更新于 {formatTime(state.content.updatedAt)} · 到期于 {formatTime(state.content.expiresAt)}</footer>
+            <div className="shared-collection-members">
+              {state.content.members.map((member) => member.type === "text" ? (
+                <article className="shared-text-view" key={member.id}>
+                  <div className="shared-content-heading">
+                    <div><FileText size={18} /><p className="share-kicker">共享文本</p></div>
+                    <button
+                      className="icon-button"
+                      onClick={() => {
+                        void navigator.clipboard.writeText(member.content).then(() => {
+                          setCopiedId(member.id);
+                          window.setTimeout(() => setCopiedId(null), 1400);
+                        });
+                      }}
+                      aria-label="复制文本"
+                      title="复制文本"
+                    >{copiedId === member.id ? <Check size={17} /> : <Copy size={17} />}</button>
+                  </div>
+                  <pre>{member.content}</pre>
+                  <footer>更新于 {formatTime(member.updatedAt)}</footer>
+                </article>
+              ) : (
+                <article className="shared-file-view" key={member.id}>
+                  <span className="share-stage-icon"><File size={25} /></span>
+                  <p className="share-kicker">共享文件</p>
+                  <h2>{member.fileName}</h2>
+                  <p>{formatBytes(member.sizeBytes)} · {member.mimeType}</p>
+                  {isPreviewableImage(member.mimeType) && (
+                    <figure className="shared-image-preview">
+                      {/* 预览必须直连带分享 Cookie 的同源接口，不能交给图片优化代理缓存。 */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/preview`}
+                        alt={member.fileName}
+                        decoding="async"
+                        referrerPolicy="no-referrer"
+                      />
+                    </figure>
+                  )}
+                  <a
+                    className="share-primary"
+                    href={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/download`}
+                  >
+                    <Download size={18} /> 下载文件
+                  </a>
+                  <footer>更新于 {formatTime(member.updatedAt)}</footer>
+                </article>
+              ))}
+            </div>
           </div>
         )}
       </section>

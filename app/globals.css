@@ -1464,6 +1464,29 @@ textarea:focus-visible,
   font-size: 10px;
 }
 
+.share-member-preview {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.share-member-preview span {
+  display: inline-flex;
+  max-width: 180px;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .share-row-url {
   display: grid;
   width: min(100%, 620px);
@@ -1597,6 +1620,30 @@ textarea:focus-visible,
   animation: dialog-rise 180ms ease both;
 }
 
+.share-edit-dialog {
+  width: min(680px, 100%);
+}
+
+.share-edit-dialog .share-dialog-body {
+  max-height: calc(90svh - 78px);
+  overflow-y: auto;
+}
+
+.share-member-picker-backdrop {
+  z-index: 70;
+  background: color-mix(in srgb, #080b09 64%, transparent);
+}
+
+.share-member-picker-dialog {
+  width: min(620px, 100%);
+}
+
+.share-member-picker-dialog .share-dialog-body {
+  max-height: calc(90svh - 78px);
+  gap: 12px;
+  overflow: hidden;
+}
+
 .share-dialog > header {
   display: flex;
   min-height: 76px;
@@ -1633,7 +1680,8 @@ textarea:focus-visible,
 
 .share-dialog legend,
 .share-code-field,
-.share-expiry-field {
+.share-expiry-field,
+.share-name-field {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 650;
@@ -1671,13 +1719,15 @@ textarea:focus-visible,
 }
 
 .share-code-field,
-.share-expiry-field {
+.share-expiry-field,
+.share-name-field {
   display: grid;
   gap: 8px;
 }
 
 .share-code-field input,
 .share-expiry-field select,
+.share-name-field input,
 .share-url-field input {
   width: 100%;
   min-width: 0;
@@ -1689,6 +1739,150 @@ textarea:focus-visible,
   background: var(--bg);
   color: var(--text);
   font-size: 12px;
+}
+
+.share-selection-summary,
+.share-current-members > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-selection-summary span,
+.share-current-members > div > span {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-current-members > div > span button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  place-items: center;
+}
+
+.share-current-members > div > span button:hover {
+  background: var(--surface-muted);
+  color: var(--danger);
+}
+
+.share-current-members small,
+.share-choice-loading {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.share-member-add-button {
+  display: inline-flex;
+  width: max-content;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.share-member-add-button:hover {
+  background: var(--surface-muted);
+}
+
+.share-member-add-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.share-member-search {
+  display: flex;
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-muted);
+}
+
+.share-member-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.share-member-choices {
+  display: grid;
+  max-height: min(360px, 48svh);
+  overflow-y: auto;
+  border-block: 1px solid var(--line);
+}
+
+.share-member-choices > label {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: 18px 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.share-member-choices > label:last-child {
+  border-bottom: 0;
+}
+
+.share-member-choices > label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-member-choices > label small {
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.share-member-choices > label.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.share-choice-loading {
+  display: inline-flex;
+  min-height: 70px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
 }
 
 .share-code-field input {
@@ -1828,6 +2022,48 @@ textarea:focus-visible,
   place-items: start center;
 }
 
+.shared-collection-view {
+  width: 100%;
+  animation: share-rise 220ms ease both;
+}
+
+.shared-collection-heading {
+  max-width: 680px;
+  margin-bottom: 34px;
+}
+
+.shared-collection-heading h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 32px;
+  line-height: 1.2;
+}
+
+.shared-collection-heading > p:last-child {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.shared-collection-members {
+  display: grid;
+}
+
+.shared-collection-members > article {
+  width: 100%;
+  max-width: none;
+  padding: 28px 0 34px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.shared-collection-members .shared-file-view h2 {
+  max-width: 100%;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
 .share-loading,
 .share-verify,
 .share-missing,
@@ -1947,6 +2183,16 @@ textarea:focus-visible,
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 28px;
+}
+
+.shared-content-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.shared-content-heading .share-kicker {
+  margin: 0;
 }
 
 .shared-text-view pre {
@@ -2139,16 +2385,27 @@ textarea:focus-visible,
   }
 
   .feed-toolbar {
-    align-items: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
+  /* 回收站操作较多时让筛选和操作各占一行，避免筛选组被压缩出横向滚动。 */
   .segmented {
-    max-width: calc(100vw - 72px);
-    overflow-x: auto;
+    display: grid;
+    width: 100%;
+    max-width: none;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    overflow-x: visible;
   }
 
   .segmented button {
-    min-width: 52px;
+    min-width: 0;
+  }
+
+  .feed-toolbar-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .feed-item {

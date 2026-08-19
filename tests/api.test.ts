@@ -88,7 +88,7 @@ test("Cloudflare 元数据存储拒绝在请求时隐式建表", async () => {
   const newerSchema = new SqlMetadataStore({
     ...sql,
     tableExists: async () => true,
-    first: async <T>() => ({ version: 5 }) as T,
+    first: async <T>() => ({ version: 6 }) as T,
   }, false);
   await assert.rejects(newerSchema.ensureSchema(), /数据库架构尚未迁移/);
 });
@@ -133,7 +133,8 @@ test("本地 SQLite 会从架构 v3 升级并保留历史分享", async () => {
   await initial.store.createShare({
     id: crypto.randomUUID(),
     ownerId: "upgrade-owner",
-    itemId: item.id,
+    itemIds: [item.id],
+    name: null,
     tokenHash: "t".repeat(43),
     accessMode: "code",
     codeHash: "h".repeat(43),
@@ -143,6 +144,8 @@ test("本地 SQLite 会从架构 v3 升级并保留历史分享", async () => {
   initial.close();
 
   const legacy = new DatabaseSync(databasePath);
+  legacy.exec("DROP TABLE share_members");
+  legacy.exec("ALTER TABLE shares DROP COLUMN name");
   legacy.exec("ALTER TABLE shares DROP COLUMN code_encrypted");
   legacy.exec("UPDATE schema_version SET version = 3 WHERE id = 1");
   legacy.close();
@@ -154,12 +157,15 @@ test("本地 SQLite 会从架构 v3 升级并保留历史分享", async () => {
     assert.equal(shares.length, 1);
     assert.equal(shares[0]?.codeHash, "h".repeat(43));
     assert.equal(shares[0]?.codeEncrypted, null);
+    assert.equal(shares[0]?.members[0]?.itemId, item.id);
   } finally {
     upgraded.close();
   }
   const verified = new DatabaseSync(databasePath);
-  assert.equal((verified.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version, 4);
+  assert.equal((verified.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version, 5);
   assert.ok(verified.prepare("SELECT name FROM pragma_table_info('shares') WHERE name = 'code_encrypted'").get());
+  assert.ok(verified.prepare("SELECT name FROM pragma_table_info('shares') WHERE name = 'name'").get());
+  assert.ok(verified.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'share_members'").get());
   verified.close();
   await rm(root, { recursive: true, force: true });
 });
@@ -184,14 +190,15 @@ test("就绪检查会探测数据库且不泄露失败细节", async () => {
 });
 
 test("分享期限契约保留四位口令前导零并拒绝自定义超长期限", () => {
-  assert.equal(createShareSchema.parse({ accessMode: "public" }).expiresInSeconds, 7 * 24 * 60 * 60);
+  const itemIds = ["d65bfe8a-3c27-4bd4-a1b7-6a5bfb42120f"];
+  assert.equal(createShareSchema.parse({ itemIds, accessMode: "public" }).expiresInSeconds, 7 * 24 * 60 * 60);
   for (const expiresInSeconds of [3_600, 86_400, 604_800, 2_592_000]) {
-    assert.equal(createShareSchema.parse({ accessMode: "public", expiresInSeconds }).expiresInSeconds, expiresInSeconds);
+    assert.equal(createShareSchema.parse({ itemIds, accessMode: "public", expiresInSeconds }).expiresInSeconds, expiresInSeconds);
   }
-  assert.equal(createShareSchema.parse({ accessMode: "code", code: "0042" }).code, "0042");
-  assert.equal(createShareSchema.safeParse({ accessMode: "public", expiresInSeconds: 7_200 }).success, false);
-  assert.equal(createShareSchema.safeParse({ accessMode: "public", code: "0042" }).success, false);
-  assert.equal(createShareSchema.safeParse({ accessMode: "code", code: "42" }).success, false);
+  assert.equal(createShareSchema.parse({ itemIds, accessMode: "code", code: "0042" }).code, "0042");
+  assert.equal(createShareSchema.safeParse({ itemIds, accessMode: "public", expiresInSeconds: 7_200 }).success, false);
+  assert.equal(createShareSchema.safeParse({ itemIds, accessMode: "public", code: "0042" }).success, false);
+  assert.equal(createShareSchema.safeParse({ itemIds, accessMode: "code", code: "42" }).success, false);
 });
 
 test("文本、搜索、收藏和回收站形成完整生命周期", async () => {
@@ -630,6 +637,104 @@ test("永久删除失败会保留配额并由清理任务安全重试", async ()
   }
 });
 
+test("分享集合支持有序成员管理、跨集合回收站联动和历史统计", async () => {
+  const current = await fixture();
+  try {
+    const createText = async (content: string) => (await (await request(current.services, "/api/items/text", {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    })).json()) as DropItem;
+    const [first, second, third] = await Promise.all([
+      createText("集合测试 A"),
+      createText("集合测试 B"),
+      createText("集合测试 C"),
+    ]);
+    const link = (await (await request(current.services, "/api/items/link", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://example.com", title: "不可分享链接" }),
+    })).json()) as DropItem;
+
+    const createdResponse = await request(current.services, "/api/shares", {
+      method: "POST",
+      body: JSON.stringify({
+        itemIds: [first.id, second.id],
+        name: "交付集合",
+        accessMode: "public",
+        expiresInSeconds: 86_400,
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = (await createdResponse.json()) as CreateShareResponse;
+    assert.equal(created.share.name, "交付集合");
+    assert.deepEqual(created.share.members.map((member) => member.itemId), [first.id, second.id]);
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    const publicContent = (await (await request(current.services, `/api/public/shares/${token}`)).json()) as PublicShareContent;
+    assert.deepEqual(publicContent.members.map((member) => member.id), [first.id, second.id]);
+
+    const secondCollection = (await (await request(current.services, "/api/shares", {
+      method: "POST",
+      body: JSON.stringify({
+        itemIds: [first.id, third.id],
+        accessMode: "public",
+        expiresInSeconds: 86_400,
+      }),
+    })).json()) as CreateShareResponse;
+    await current.services.metadata.shares.recordShareDownload(created.share.id, first.id, Date.now());
+
+    const invalidUpdate = await request(current.services, `/api/shares/${created.share.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ itemIds: [second.id, link.id] }),
+    });
+    assert.equal(invalidUpdate.status, 409);
+    const unchanged = (await (await request(current.services, `/api/public/shares/${token}`)).json()) as PublicShareContent;
+    assert.deepEqual(unchanged.members.map((member) => member.id), [first.id, second.id]);
+
+    const updated = await request(current.services, `/api/shares/${created.share.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name: null, itemIds: [first.id, second.id, third.id, third.id] }),
+    });
+    assert.equal(updated.status, 200);
+    const updatedSummary = (await updated.json()) as { share: CreateShareResponse["share"] };
+    assert.deepEqual(updatedSummary.share.members.map((member) => member.itemId), [first.id, second.id, third.id]);
+    assert.equal(updatedSummary.share.name, "集合测试 A 等 3 项");
+
+    await request(current.services, `/api/shares/${created.share.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ itemIds: [second.id, third.id] }),
+    });
+    const storedAfterRemoval = await current.services.metadata.shares.getShareByTokenHash(
+      await keyedDigest(current.services.sharing.secret, "share-token-hash", token),
+    );
+    assert.equal(storedAfterRemoval?.downloadCount, 1);
+    assert.equal(storedAfterRemoval?.members.find((member) => member.itemId === first.id)?.removedAt !== null, true);
+
+    await request(current.services, "/api/items/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids: [first.id], action: "trash" }),
+    });
+    const secondToken = new URL(secondCollection.shareUrl).pathname.split("/").at(-1)!;
+    const secondAfterTrash = (await (await request(current.services, `/api/public/shares/${secondToken}`)).json()) as PublicShareContent;
+    assert.deepEqual(secondAfterTrash.members.map((member) => member.id), [third.id]);
+    await request(current.services, "/api/items/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids: [first.id], action: "restore" }),
+    });
+    const secondAfterRestore = (await (await request(current.services, `/api/public/shares/${secondToken}`)).json()) as PublicShareContent;
+    assert.deepEqual(secondAfterRestore.members.map((member) => member.id), [third.id]);
+
+    const terminated = await request(current.services, `/api/shares/${created.share.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ itemIds: [] }),
+    });
+    assert.equal(terminated.status, 200);
+    assert.equal((await request(current.services, `/api/public/shares/${token}`)).status, 404);
+    const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(listed.shares.some((share) => share.id === created.share.id), false);
+  } finally {
+    await current.close();
+  }
+});
+
 test("口令分享限制尝试并在回收站操作后永久失效", async () => {
   const current = await fixture();
   try {
@@ -693,7 +798,7 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
       headers: { cookie },
     });
     assert.equal(contentResponse.status, 200);
-    assert.equal(((await contentResponse.json()) as PublicShareContent).type, "text");
+    assert.equal(((await contentResponse.json()) as PublicShareContent).members[0]?.type, "text");
 
     current.services.sharing.resolveClientAddress = () => "127.0.0.3";
     const fourFailures = () => Promise.all(Array.from({ length: 4 }, () =>
@@ -738,13 +843,13 @@ test("口令分享限制尝试并在回收站操作后永久失效", async () =>
     });
     assert.equal((await request(current.services, `/api/public/shares/${token}`, { headers: { cookie } })).status, 404);
     const shares = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
-    assert.equal(shares.shares[0]?.status, "revoked");
+    assert.equal(shares.shares.length, 0);
   } finally {
     await current.close();
   }
 });
 
-test("并发轮换只留下一个有效分享且过期读取不依赖清理任务", async () => {
+test("同一内容可进入多个分享集合且过期读取不依赖清理任务", async () => {
   const current = await fixture();
   try {
     const item = (await (await request(current.services, "/api/items/text", {
@@ -769,9 +874,9 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
       const token = new URL(shareUrl).pathname.split("/").at(-1)!;
       return request(current.services, `/api/public/shares/${token}`).then((response) => response.status);
     }));
-    assert.deepEqual(statuses.sort(), [200, 404]);
+    assert.deepEqual(statuses.sort(), [200, 200]);
     const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
-    assert.equal(listed.shares.filter((share) => share.status === "active").length, 1);
+    assert.equal(listed.shares.filter((share) => share.status === "active").length, 2);
     assert.equal(listed.shares.find((share) => share.status === "active")?.code, null);
 
     const expiredId = crypto.randomUUID();
@@ -779,7 +884,8 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
     await current.services.metadata.shares.createShare({
       id: expiredId,
       ownerId: "test-owner",
-      itemId: item.id,
+      itemIds: [item.id],
+      name: null,
       tokenHash: await keyedDigest(current.services.sharing.secret, "share-token-hash", expiredToken),
       accessMode: "public",
       codeHash: null,
@@ -799,7 +905,8 @@ test("并发轮换只留下一个有效分享且过期读取不依赖清理任�
     await current.services.metadata.shares.createShare({
       id: staleId,
       ownerId: "test-owner",
-      itemId: item.id,
+      itemIds: [item.id],
+      name: null,
       tokenHash: staleTokenHash,
       accessMode: "public",
       codeHash: null,
@@ -961,6 +1068,15 @@ test("分享图片预览在验证后内联返回且不计为下载", async () =>
     const beforeVerification = await request(current.services, `/api/public/shares/${token}/preview`);
     assert.equal(beforeVerification.status, 401);
     assert.doesNotMatch(await beforeVerification.text(), /preview\.png/);
+    const unknownItemId = crypto.randomUUID();
+    assert.equal(
+      (await request(current.services, `/api/public/shares/${token}/items/${unknownItemId}/preview`)).status,
+      401,
+    );
+    assert.equal(
+      (await request(current.services, `/api/public/shares/${token}/items/${unknownItemId}/download`)).status,
+      401,
+    );
 
     const verified = await request(current.services, `/api/public/shares/${token}/verify`, {
       method: "POST",
@@ -969,6 +1085,12 @@ test("分享图片预览在验证后内联返回且不计为下载", async () =>
     assert.equal(verified.status, 200);
     const cookie = verified.headers.get("set-cookie")?.split(";")[0];
     assert.ok(cookie);
+    assert.equal(
+      (await request(current.services, `/api/public/shares/${token}/items/${unknownItemId}/preview`, {
+        headers: { cookie },
+      })).status,
+      404,
+    );
 
     const preview = await request(current.services, `/api/public/shares/${token}/preview`, {
       headers: { cookie },

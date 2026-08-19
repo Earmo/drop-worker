@@ -117,9 +117,10 @@ export function registerItemRoutes(api: ApiApp): void {
       const summary = shareSummary(share, now, c.env.services.sharing.publicUrl);
       return {
         id: summary.id,
-        itemId: summary.itemId,
-        itemType: summary.itemType,
-        itemLabel: summary.itemLabel,
+        name: summary.name,
+        customName: summary.customName,
+        members: summary.members,
+        itemCount: summary.itemCount,
         accessMode: summary.accessMode,
         status: summary.status,
         createdAt: summary.createdAt,

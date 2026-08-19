@@ -149,6 +149,7 @@ export type AuthStatus = z.infer<typeof authStatusSchema>;
 
 export const shareAccessModeSchema = z.enum(["public", "code"]);
 export type ShareAccessMode = z.infer<typeof shareAccessModeSchema>;
+export const SHARE_MAX_ITEMS = 50;
 
 export const shareStatusSchema = z.enum(["active", "expired", "revoked"]);
 export type ShareStatus = z.infer<typeof shareStatusSchema>;
@@ -161,23 +162,49 @@ export const shareExpirySecondsSchema = z.union([
 ]);
 export type ShareExpirySeconds = z.infer<typeof shareExpirySecondsSchema>;
 
+const shareSettingsFields = {
+  name: z.string().trim().min(1).max(120).nullable().optional(),
+  accessMode: shareAccessModeSchema,
+  expiresInSeconds: shareExpirySecondsSchema.default(7 * 24 * 60 * 60),
+  code: z.string().regex(/^\d{4}$/).optional(),
+};
+
 export const createShareSchema = z
   .object({
-    accessMode: shareAccessModeSchema,
-    expiresInSeconds: shareExpirySecondsSchema.default(7 * 24 * 60 * 60),
-    code: z.string().regex(/^\d{4}$/).optional(),
+    ...shareSettingsFields,
+    itemIds: z.array(z.string().uuid()).min(1).max(SHARE_MAX_ITEMS),
   })
   .superRefine((value, context) => {
     if (value.accessMode === "public" && value.code !== undefined) {
       context.addIssue({ code: "custom", message: "公开分享不能设置口令", path: ["code"] });
     }
   });
+export type CreateShareInput = z.infer<typeof createShareSchema>;
 
-export const shareSummarySchema = z.object({
-  id: z.string().uuid(),
+export const updateShareSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120).nullable().optional(),
+    itemIds: z.array(z.string().uuid()).max(SHARE_MAX_ITEMS).optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, "至少提供一个变更字段");
+export type UpdateShareInput = z.infer<typeof updateShareSchema>;
+
+export const shareMemberSummarySchema = z.object({
   itemId: z.string().uuid(),
   itemType: z.enum(["text", "file"]),
   itemLabel: z.string(),
+  position: z.number().int().nonnegative(),
+  addedAt: z.number().int(),
+  downloadCount: z.number().int().nonnegative(),
+});
+export type ShareMemberSummary = z.infer<typeof shareMemberSummarySchema>;
+
+export const shareSummarySchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  customName: z.string().nullable(),
+  members: z.array(shareMemberSummarySchema).max(SHARE_MAX_ITEMS),
+  itemCount: z.number().int().nonnegative().max(SHARE_MAX_ITEMS),
   accessMode: shareAccessModeSchema,
   status: shareStatusSchema,
   createdAt: z.number().int(),
@@ -198,22 +225,29 @@ export const createShareResponseSchema = z.object({
 });
 export type CreateShareResponse = z.infer<typeof createShareResponseSchema>;
 
-export const publicShareContentSchema = z.discriminatedUnion("type", [
+export const publicShareMemberSchema = z.discriminatedUnion("type", [
   z.object({
+    id: z.string().uuid(),
     type: z.literal("text"),
     content: z.string(),
     updatedAt: z.number().int(),
-    expiresAt: z.number().int(),
   }),
   z.object({
+    id: z.string().uuid(),
     type: z.literal("file"),
     fileName: z.string(),
     mimeType: z.string(),
     sizeBytes: z.number().int().nonnegative(),
     updatedAt: z.number().int(),
-    expiresAt: z.number().int(),
   }),
 ]);
+export type PublicShareMember = z.infer<typeof publicShareMemberSchema>;
+
+export const publicShareContentSchema = z.object({
+  name: z.string(),
+  expiresAt: z.number().int(),
+  members: z.array(publicShareMemberSchema).min(1).max(SHARE_MAX_ITEMS),
+});
 export type PublicShareContent = z.infer<typeof publicShareContentSchema>;
 
 export const verifyShareSchema = z.object({

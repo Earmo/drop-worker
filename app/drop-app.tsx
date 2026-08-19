@@ -21,6 +21,7 @@ import {
   Moon,
   Paperclip,
   Pencil,
+  Plus,
   RotateCcw,
   Search,
   Send,
@@ -65,6 +66,13 @@ function TypeIcon({ type }: { type: ItemType }) {
   return <File size={17} />;
 }
 
+function itemDisplayLabel(item: DropItem): string {
+  if (item.type === "file") return item.displayName || item.originalName || "未命名文件";
+  if (item.type === "link") return item.title || item.content || "未命名链接";
+  const content = item.content?.trim() || "未命名文本";
+  return content.length > 80 ? `${content.slice(0, 80)}…` : content;
+}
+
 export function DropApp() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [view, setView] = useState<View>("timeline");
@@ -86,7 +94,8 @@ export function DropApp() {
   const [cleanupSize, setCleanupSize] = useState("all");
   const [sharedDraft, setSharedDraft] = useState("");
   const [shares, setShares] = useState<ShareSummary[]>([]);
-  const [shareTarget, setShareTarget] = useState<DropItem | null>(null);
+  const [shareTargets, setShareTargets] = useState<DropItem[]>([]);
+  const [editingShare, setEditingShare] = useState<ShareSummary | null>(null);
   const refreshVersion = useRef(0);
 
   useEffect(() => {
@@ -457,10 +466,19 @@ export function DropApp() {
     return new Set([...groups.values()].filter((group) => group.length > 1).flat());
   }, [items]);
 
-  const activeSharesByItem = useMemo(
-    () => new Map(shares.filter((share) => share.status === "active").map((share) => [share.itemId, share])),
-    [shares],
-  );
+  const activeShareCountByItem = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const share of shares) {
+      if (share.status !== "active") continue;
+      for (const member of share.members) counts.set(member.itemId, (counts.get(member.itemId) || 0) + 1);
+    }
+    return counts;
+  }, [shares]);
+
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const selectedItems = [...selected].map((id) => itemsById.get(id)).filter((item): item is DropItem => Boolean(item));
+  const selectedItemsCanShare = selectedItems.length <= 50
+    && selectedItems.every((item) => item.type === "text" || item.type === "file");
 
   const selectedBytes = visibleItems
     .filter((item) => selected.has(item.id) && item.type === "file")
@@ -574,10 +592,11 @@ export function DropApp() {
             <ShareManager
               shares={shares}
               onCopy={(value, kind) => void navigator.clipboard.writeText(value).then(() => showNotice(`分享${kind}已复制`))}
-              onRevoke={async (share) => {
-                if (!window.confirm(`撤销“${share.itemLabel}”的分享？旧链接将立即失效。`)) return;
+              onEdit={setEditingShare}
+              onTerminate={async (share) => {
+                if (!window.confirm(`删除“${share.name}”？原链接将立即失效且不可恢复。`)) return;
                 await api(`/api/shares/${share.id}`, { method: "DELETE" });
-                showNotice("分享已撤销");
+                showNotice("分享集合已删除");
                 await loadData(true);
               }}
             />
@@ -628,9 +647,18 @@ export function DropApp() {
                     </button>
                   </>
                 ) : (
-                  <button className="danger" onClick={() => void runItemAction([...selected], "trash")}>
-                    <Trash2 size={15} /> 移入回收站
-                  </button>
+                  <>
+                    <button
+                      onClick={() => setShareTargets(selectedItems)}
+                      disabled={!selectedItemsCanShare}
+                      title={selectedItemsCanShare ? "创建分享集合" : "仅支持选择不超过 50 个文本或文件"}
+                    >
+                      <Share2 size={15} /> 分享
+                    </button>
+                    <button className="danger" onClick={() => void runItemAction([...selected], "trash")}>
+                      <Trash2 size={15} /> 移入回收站
+                    </button>
+                  </>
                 )}
                 <button className="icon-button" onClick={() => setSelected(new Set())} aria-label="取消选择">
                   <X size={15} />
@@ -653,7 +681,7 @@ export function DropApp() {
                   selected={selected.has(item.id)}
                   trash={view === "trash"}
                   suspectedDuplicate={duplicateIds.has(item.id)}
-                  activeShare={activeSharesByItem.get(item.id) || null}
+                  activeShareCount={activeShareCountByItem.get(item.id) || 0}
                   onSelect={(checked) =>
                     setSelected((current) => {
                       const next = new Set(current);
@@ -666,7 +694,7 @@ export function DropApp() {
                   onTrash={() => void runItemAction([item.id], "trash")}
                   onRestore={() => void runItemAction([item.id], "restore")}
                   onPurge={() => void runItemAction([item.id], "purge")}
-                  onShare={() => setShareTarget(item)}
+                  onShare={() => setShareTargets([item])}
                   onNotice={showNotice}
                 />
               ))
@@ -684,12 +712,22 @@ export function DropApp() {
       </main>
 
       {notice && <div className="toast" role="status">{notice}</div>}
-      {shareTarget && (
+      {shareTargets.length > 0 && (
         <ShareDialog
-          item={shareTarget}
-          existing={activeSharesByItem.get(shareTarget.id) || null}
-          onClose={() => setShareTarget(null)}
+          items={shareTargets}
+          onClose={() => setShareTargets([])}
           onCreated={async () => {
+            setSelected(new Set());
+            await loadData(true);
+          }}
+        />
+      )}
+      {editingShare && (
+        <ShareEditDialog
+          share={editingShare}
+          onClose={() => setEditingShare(null)}
+          onSaved={async () => {
+            setEditingShare(null);
             await loadData(true);
           }}
         />
@@ -938,11 +976,13 @@ function UploadQueue({
 function ShareManager({
   shares,
   onCopy,
-  onRevoke,
+  onEdit,
+  onTerminate,
 }: {
   shares: ShareSummary[];
   onCopy(value: string, kind: "链接" | "口令" | "链接和口令"): void;
-  onRevoke(share: ShareSummary): Promise<void>;
+  onEdit(share: ShareSummary): void;
+  onTerminate(share: ShareSummary): Promise<void>;
 }) {
   const activeCount = shares.filter((share) => share.status === "active").length;
   return (
@@ -955,24 +995,34 @@ function ShareManager({
         <div className="empty-state share-empty">
           <Share2 size={24} />
           <strong>还没有分享</strong>
-          <span>在文本或文件条目上点击分享按钮</span>
+          <span>选择一个或多个文本、文件后创建分享集合</span>
         </div>
       ) : (
         <div className="share-list">
           {shares.map((share) => (
             <article className={`share-row status-${share.status}`} key={share.id}>
-              <span className="share-row-icon">{share.itemType === "file" ? <File size={18} /> : <FileText size={18} />}</span>
+              <span className="share-row-icon"><Share2 size={18} /></span>
               <div className="share-row-main">
-                <div className="share-row-title"><strong>{share.itemLabel}</strong><span>{share.status === "active" ? "有效" : share.status === "expired" ? "已过期" : "已撤销"}</span></div>
+                <div className="share-row-title"><strong>{share.name}</strong><span>{share.status === "active" ? "有效" : "已过期"}</span></div>
                 <div className="share-row-meta">
+                  <span>{share.itemCount} 个成员</span>
                   <span>{share.accessMode === "public" ? "公开访问" : "口令确认"}</span>
                   <span>到期 {formatTime(share.expiresAt)}</span>
                   <span>访问 {share.accessCount} · 下载 {share.downloadCount}</span>
                   {share.lastAccessedAt && <span>最近 {formatTime(share.lastAccessedAt)}</span>}
                 </div>
+                <div className="share-member-preview">
+                  {share.members.slice(0, 4).map((member) => (
+                    <span key={member.itemId} title={member.itemLabel}>
+                      {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
+                      {member.itemLabel}
+                    </span>
+                  ))}
+                  {share.members.length > 4 && <span>另有 {share.members.length - 4} 项</span>}
+                </div>
                 {share.status === "active" && share.shareUrl && (
                   <div className="share-row-url">
-                    <input readOnly value={share.shareUrl} aria-label={`${share.itemLabel}分享链接`} />
+                    <input readOnly value={share.shareUrl} aria-label={`${share.name}分享链接`} />
                     <button
                       onClick={() => onCopy(`${share.shareUrl}${share.code ? `#code=${share.code}` : ""}`, share.code ? "链接和口令" : "链接")}
                       title={share.code ? "复制分享链接和口令" : "复制分享链接"}
@@ -991,8 +1041,9 @@ function ShareManager({
                   ) : <span className="share-once-note">历史口令不可恢复</span>
                 )}
                 {share.status === "active" && (
-                  <button className="danger" onClick={() => void onRevoke(share)} title="撤销分享" aria-label="撤销分享"><X size={16} /></button>
+                  <button onClick={() => onEdit(share)} title="管理集合" aria-label="管理集合"><Pencil size={16} /></button>
                 )}
+                <button className="danger" onClick={() => void onTerminate(share)} title="删除集合" aria-label="删除集合"><Trash2 size={16} /></button>
               </div>
             </article>
           ))}
@@ -1003,16 +1054,15 @@ function ShareManager({
 }
 
 function ShareDialog({
-  item,
-  existing,
+  items,
   onClose,
   onCreated,
 }: {
-  item: DropItem;
-  existing: ShareSummary | null;
+  items: DropItem[];
   onClose(): void;
   onCreated(): Promise<void>;
 }) {
+  const [name, setName] = useState("");
   const [accessMode, setAccessMode] = useState<"public" | "code">("code");
   const [expiresInSeconds, setExpiresInSeconds] = useState(7 * 24 * 60 * 60);
   const [code, setCode] = useState("");
@@ -1026,9 +1076,11 @@ function ShareDialog({
     setBusy(true);
     setError(null);
     try {
-      const response = await api<CreateShareResponse>(`/api/items/${item.id}/share`, {
+      const response = await api<CreateShareResponse>("/api/shares", {
         method: "POST",
         body: JSON.stringify({
+          itemIds: items.map((item) => item.id),
+          ...(name.trim() ? { name: name.trim() } : {}),
           accessMode,
           expiresInSeconds,
           ...(accessMode === "code" && code ? { code } : {}),
@@ -1049,7 +1101,7 @@ function ShareDialog({
     }}>
       <section className="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
         <header>
-          <div><p>临时分享</p><h2 id="share-dialog-title">{item.type === "file" ? item.displayName || item.originalName : "共享文本"}</h2></div>
+          <div><p>创建分享集合</p><h2 id="share-dialog-title">{items.length} 个成员</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={17} /></button>
         </header>
         {result ? (
@@ -1063,7 +1115,20 @@ function ShareDialog({
           </div>
         ) : (
           <div className="share-dialog-body">
-            {existing && <div className="share-replace-warning">重新创建会立即撤销当前有效链接。</div>}
+            <div className="share-selection-summary">
+              {items.slice(0, 4).map((item) => (
+                <span key={item.id}><TypeIcon type={item.type} />{itemDisplayLabel(item)}</span>
+              ))}
+              {items.length > 4 && <span>另有 {items.length - 4} 项</span>}
+            </div>
+            <label className="share-name-field">集合名称（可选）
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value.slice(0, 120))}
+                placeholder="未填写时根据首个成员自动生成"
+                maxLength={120}
+              />
+            </label>
             <fieldset>
               <legend>访问方式</legend>
               <div className="share-mode-control">
@@ -1101,13 +1166,281 @@ function ShareDialog({
   );
 }
 
+type ShareDraftMember = { label: string; type: "text" | "file" };
+
+function ShareMemberPicker({
+  selected,
+  addedMembers,
+  onCancel,
+  onConfirm,
+}: {
+  selected: ReadonlySet<string>;
+  addedMembers: ReadonlyMap<string, ShareDraftMember>;
+  onCancel(): void;
+  onConfirm(selected: Set<string>, addedMembers: Map<string, ShareDraftMember>): void;
+}) {
+  // 选择层使用隔离草稿，只有明确确认后才把新增成员写回集合编辑弹窗。
+  const [draftSelected, setDraftSelected] = useState<Set<string>>(() => new Set(selected));
+  const [draftAddedMembers, setDraftAddedMembers] = useState<Map<string, ShareDraftMember>>(
+    () => new Map(addedMembers),
+  );
+  const [query, setQuery] = useState("");
+  const [choices, setChoices] = useState<DropItem[]>([]);
+  const [loadingChoices, setLoadingChoices] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    searchInput.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setLoadingChoices(true);
+      setError(null);
+      const params = new URLSearchParams({ trash: "false", sort: "latest", limit: "100", cursor: "0" });
+      if (query.trim()) params.set("q", query.trim());
+      void api<ListItemsResponse>(`/api/items?${params}`).then((result) => {
+        if (!cancelled) setChoices(result.items);
+      }).catch((candidate) => {
+        if (!cancelled) setError(candidate instanceof Error ? candidate.message : "内容列表加载失败");
+      }).finally(() => {
+        if (!cancelled) setLoadingChoices(false);
+      });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  const toggle = (item: DropItem, checked: boolean) => {
+    // 打开选择层时已有的成员保持锁定，移除操作只在主弹窗中进行。
+    if (selected.has(item.id)) return;
+    if (checked && !draftSelected.has(item.id) && draftSelected.size >= 50) return;
+    setDraftSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(item.id);
+      else next.delete(item.id);
+      return next;
+    });
+    setDraftAddedMembers((current) => {
+      const next = new Map(current);
+      if (checked) {
+        next.set(item.id, {
+          label: itemDisplayLabel(item),
+          type: item.type === "file" ? "file" : "text",
+        });
+      } else {
+        next.delete(item.id);
+      }
+      return next;
+    });
+  };
+
+  const addedCount = [...draftSelected].filter((itemId) => !selected.has(itemId)).length;
+
+  return (
+    <div className="dialog-backdrop share-member-picker-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onCancel();
+    }}>
+      <section className="share-dialog share-member-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="share-member-picker-title">
+        <header>
+          <div><p>选择内容</p><h2 id="share-member-picker-title">添加分享成员</h2></div>
+          <button className="icon-button" onClick={onCancel} aria-label="关闭成员选择"><X size={17} /></button>
+        </header>
+        <div className="share-dialog-body">
+          <label className="share-member-search">
+            <Search size={15} />
+            <input
+              ref={searchInput}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索可添加的内容"
+            />
+          </label>
+          <div className="share-member-choices" aria-busy={loadingChoices}>
+            {loadingChoices ? (
+              <span className="share-choice-loading"><LoaderCircle className="spin" size={15} /> 正在加载</span>
+            ) : choices.length === 0 ? (
+              <span className="share-choice-loading">没有匹配内容</span>
+            ) : choices.map((item) => {
+              const shareable = item.type === "text" || item.type === "file";
+              const alreadyMember = selected.has(item.id);
+              const checked = draftSelected.has(item.id);
+              const disabled = !shareable || alreadyMember || (!checked && draftSelected.size >= 50);
+              return (
+                <label className={disabled ? "disabled" : ""} key={item.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={disabled}
+                    onChange={(event) => toggle(item, event.target.checked)}
+                  />
+                  <TypeIcon type={item.type} />
+                  <span>{itemDisplayLabel(item)}</span>
+                  {!shareable ? <small>链接不可分享</small> : alreadyMember ? <small>已在集合中</small> : null}
+                </label>
+              );
+            })}
+          </div>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <div className="share-dialog-actions">
+            <button onClick={onCancel}>取消</button>
+            <button
+              className="share-create-button"
+              onClick={() => onConfirm(draftSelected, draftAddedMembers)}
+              disabled={addedCount === 0}
+            >
+              <Plus size={16} /> 添加所选成员{addedCount > 0 ? `（${addedCount}）` : ""}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ShareEditDialog({
+  share,
+  onClose,
+  onSaved,
+}: {
+  share: ShareSummary;
+  onClose(): void;
+  onSaved(): Promise<void>;
+}) {
+  const [name, setName] = useState(share.customName || "");
+  const [selected, setSelected] = useState<Set<string>>(
+    new Set(share.members.map((member) => member.itemId)),
+  );
+  const [addedMembers, setAddedMembers] = useState<Map<string, ShareDraftMember>>(new Map());
+  const [memberPickerOpen, setMemberPickerOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const addMemberButton = useRef<HTMLButtonElement>(null);
+
+  const removeMember = (itemId: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      next.delete(itemId);
+      return next;
+    });
+    setAddedMembers((current) => {
+      const next = new Map(current);
+      next.delete(itemId);
+      return next;
+    });
+  };
+
+  const closeMemberPicker = () => {
+    setMemberPickerOpen(false);
+    window.setTimeout(() => addMemberButton.current?.focus(), 0);
+  };
+
+  const save = async () => {
+    if (busy) return;
+    if (selected.size === 0 && !window.confirm("取消最后一个成员会删除整个分享集合，继续吗？")) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/shares/${share.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: name.trim() || null, itemIds: [...selected] }),
+      });
+      await onSaved();
+    } catch (candidate) {
+      setError(candidate instanceof Error ? candidate.message : "分享集合保存失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section
+        className="share-dialog share-edit-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="share-edit-title"
+        aria-hidden={memberPickerOpen || undefined}
+      >
+        <header>
+          <div><p>管理分享集合</p><h2 id="share-edit-title">{share.name}</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="share-dialog-body">
+          <label className="share-name-field">集合名称（可选）
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value.slice(0, 120))}
+              placeholder="使用自动名称"
+              maxLength={120}
+            />
+          </label>
+          <fieldset className="share-current-members">
+            <legend>当前成员 · {selected.size}/50</legend>
+            <div>
+              {share.members.map((member) => selected.has(member.itemId) && (
+                <span key={member.itemId}>
+                  {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
+                  {member.itemLabel}
+                  <button onClick={() => removeMember(member.itemId)} aria-label={`取消 ${member.itemLabel}`}><X size={12} /></button>
+                </span>
+              ))}
+              {[...addedMembers].map(([itemId, member]) => selected.has(itemId) && (
+                <span key={itemId}>
+                  {member.type === "file" ? <File size={12} /> : <FileText size={12} />}
+                  {member.label}
+                  <button onClick={() => removeMember(itemId)} aria-label={`取消 ${member.label}`}><X size={12} /></button>
+                </span>
+              ))}
+              {selected.size === 0 && <small>保存后集合将被删除</small>}
+            </div>
+          </fieldset>
+          <button
+            ref={addMemberButton}
+            className="share-member-add-button"
+            onClick={() => setMemberPickerOpen(true)}
+            disabled={selected.size >= 50}
+          >
+            <Plus size={16} /> 添加分享成员
+          </button>
+          {error && <div className="form-error" role="alert">{error}</div>}
+          <div className="share-dialog-actions">
+            <button onClick={onClose}>取消</button>
+            <button className="share-create-button" onClick={() => void save()} disabled={busy}>
+              {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />} 保存更改
+            </button>
+          </div>
+        </div>
+      </section>
+      {memberPickerOpen && (
+        <ShareMemberPicker
+          selected={selected}
+          addedMembers={addedMembers}
+          onCancel={closeMemberPicker}
+          onConfirm={(nextSelected, nextAddedMembers) => {
+            setSelected(nextSelected);
+            setAddedMembers(nextAddedMembers);
+            closeMemberPicker();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function ItemEntry({
   item,
   now,
   selected,
   trash,
   suspectedDuplicate,
-  activeShare,
+  activeShareCount,
   onSelect,
   onUpdate,
   onTrash,
@@ -1121,7 +1454,7 @@ function ItemEntry({
   selected: boolean;
   trash: boolean;
   suspectedDuplicate: boolean;
-  activeShare: ShareSummary | null;
+  activeShareCount: number;
   onSelect(value: boolean): void;
   onUpdate(id: string, changes: Record<string, unknown>): Promise<void>;
   onTrash(): void;
@@ -1157,7 +1490,9 @@ function ItemEntry({
           <span>{typeLabel(item.type)}</span><span>·</span><time>{formatTime(item.createdAt)}</time>
           {item.updatedAt > item.createdAt + 1000 && <span>已编辑</span>}
           {suspectedDuplicate && <span className="duplicate-tag">疑似重复</span>}
-          {activeShare && <span className="share-active-tag"><Share2 size={11} /> 分享中</span>}
+          {activeShareCount > 0 && (
+            <span className="share-active-tag"><Share2 size={11} /> {activeShareCount > 1 ? `${activeShareCount} 个集合` : "分享中"}</span>
+          )}
           {trash && item.deletedAt && <span>剩余 {Math.max(0, 30 - Math.floor((now - item.deletedAt) / 86_400_000))} 天</span>}
         </div>
         {editing ? (
@@ -1225,7 +1560,7 @@ function ItemEntry({
         )}
         {!trash && <button onClick={() => setEditing(true)} aria-label="编辑" title="编辑"><Pencil size={16} /></button>}
         {!trash && (item.type === "text" || item.type === "file") && (
-          <button className={activeShare ? "active-share" : ""} onClick={onShare} aria-label="分享" title="分享">
+          <button className={activeShareCount > 0 ? "active-share" : ""} onClick={onShare} aria-label="分享" title="分享">
             <Share2 size={16} />
           </button>
         )}

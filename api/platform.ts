@@ -29,10 +29,23 @@ export type UploadRecord = Omit<UploadSession, "status"> & {
   providerUploadId: string;
 };
 
+export type ShareMemberRemovalReason = "manual" | "trash";
+
+export type StoredShareMember = {
+  itemId: string;
+  position: number;
+  addedAt: number;
+  removedAt: number | null;
+  removalReason: ShareMemberRemovalReason | null;
+  downloadCount: number;
+  // 已取消成员会保留统计；对应内容永久删除后 item 可以为空。
+  item: StoredItem | null;
+};
+
 export type StoredShare = {
   id: string;
   ownerId: string;
-  itemId: string;
+  name: string | null;
   tokenHash: string;
   accessMode: ShareAccessMode;
   codeHash: string | null;
@@ -43,7 +56,7 @@ export type StoredShare = {
   accessCount: number;
   downloadCount: number;
   lastAccessedAt: number | null;
-  item: StoredItem;
+  members: StoredShareMember[];
 };
 
 export type ShareAttemptRecord = {
@@ -133,7 +146,8 @@ export interface MetadataStore {
   createShare(input: {
     id: string;
     ownerId: string;
-    itemId: string;
+    itemIds: string[];
+    name: string | null;
     tokenHash: string;
     accessMode: ShareAccessMode;
     codeHash: string | null;
@@ -141,10 +155,17 @@ export interface MetadataStore {
     now: number;
     expiresAt: number;
   }): Promise<StoredShare | null>;
+  updateShare(
+    ownerId: string,
+    id: string,
+    changes: { name?: string | null; itemIds?: string[] },
+    now: number,
+  ): Promise<StoredShare | null>;
   listShares(ownerId: string, now: number, historyAfter: number): Promise<StoredShare[]>;
   getShareByTokenHash(tokenHash: string): Promise<StoredShare | null>;
   revokeShare(ownerId: string, id: string, now: number): Promise<StoredShare | null>;
-  recordShareAccess(id: string, now: number, download: boolean): Promise<void>;
+  recordShareAccess(id: string, now: number): Promise<void>;
+  recordShareDownload(id: string, itemId: string, now: number): Promise<void>;
   getShareAttempt(shareId: string, sourceHash: string): Promise<ShareAttemptRecord | null>;
   recordShareFailure(shareId: string, sourceHash: string, now: number): Promise<ShareAttemptRecord>;
   saveShareAttempt(record: ShareAttemptRecord): Promise<void>;
@@ -172,7 +193,7 @@ export interface MetadataStore {
   listPortablePendingUploads(): Promise<UploadRecord[]>;
   discardPortableUpload(ownerId: string, id: string): Promise<void>;
   importPortableItem(item: StoredItem): Promise<void>;
-  importPortableShare(share: Omit<StoredShare, "item">): Promise<void>;
+  importPortableShare(share: StoredShare): Promise<void>;
   preparePortableImport(migrationId: string, now: number, blobsEmpty: boolean): Promise<"new" | "resume" | "rejected">;
   finishPortableImport(migrationId: string, now: number): Promise<void>;
   deleteExpiredSessions(now: number): Promise<void>;
@@ -211,10 +232,12 @@ export type UploadStore = Pick<
 export type ShareStore = Pick<
   MetadataStore,
   | "createShare"
+  | "updateShare"
   | "listShares"
   | "getShareByTokenHash"
   | "revokeShare"
   | "recordShareAccess"
+  | "recordShareDownload"
   | "getShareAttempt"
   | "recordShareFailure"
   | "saveShareAttempt"

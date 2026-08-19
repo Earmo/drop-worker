@@ -43,7 +43,8 @@ test("可移植存储备份保留条目与分享但丢弃登录会话", async ()
     await sourceMetadata.store.createShare({
       id: "d65bfe8a-3c27-4bd4-a1b7-6a5bfb42120f",
       ownerId: "portable-owner",
-      itemId: item.id,
+      itemIds: [item.id],
+      name: null,
       tokenHash: "a".repeat(43),
       accessMode: "code",
       codeHash: "b".repeat(43),

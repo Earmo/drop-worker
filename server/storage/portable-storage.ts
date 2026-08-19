@@ -5,7 +5,7 @@ import { z } from "zod";
 import { LocalBlobStore } from "../../api/stores/local";
 import { openRelationalMetadataStore } from "../../api/stores/relational";
 import { createS3BlobStoreFromEnv, S3BlobStore } from "../../api/stores/s3";
-import type { BlobStore, MetadataStore, StoredItem, StoredShare } from "../../api/platform";
+import type { BlobStore, MetadataStore, StoredItem } from "../../api/platform";
 import { parseBlobDriver } from "../../api/runtime-config";
 import { migrateConfiguredDatabase } from "./migrate-database";
 
@@ -24,8 +24,15 @@ const portableItemSchema = z.object({
   updatedAt: z.number().int(), deletedAt: z.number().int().nullable(),
 });
 
+const portableShareMemberSchema = z.object({
+  itemId: z.string().uuid(), position: z.number().int().nonnegative(), addedAt: z.number().int(),
+  removedAt: z.number().int().nullable(), removalReason: z.enum(["manual", "trash"]).nullable(),
+  downloadCount: z.number().int().nonnegative(),
+});
+
 const portableShareSchema = z.object({
-  id: z.string().uuid(), ownerId: z.string().min(1), itemId: z.string().uuid(),
+  id: z.string().uuid(), ownerId: z.string().min(1), itemId: z.string().uuid().optional(),
+  name: z.string().nullable().default(null), members: z.array(portableShareMemberSchema).optional(),
   tokenHash: z.string().min(32), accessMode: z.enum(["public", "code"]), codeHash: z.string().nullable(),
   codeEncrypted: z.string().nullable().default(null),
   createdAt: z.number().int(), expiresAt: z.number().int(), revokedAt: z.number().int().nullable(),
@@ -35,10 +42,10 @@ const portableShareSchema = z.object({
 
 const portableManifestSchema = z.object({
   format: z.literal("drop-worker-portable-storage"),
-  version: z.literal(2),
+  version: z.union([z.literal(2), z.literal(3)]),
   migrationId: z.string().uuid(),
   createdAt: z.string(),
-  schemaVersion: z.union([z.literal(3), z.literal(4)]),
+  schemaVersion: z.union([z.literal(3), z.literal(4), z.literal(5)]),
   secretFingerprint: z.string().length(64),
   items: z.array(portableItemSchema),
   shares: z.array(portableShareSchema),
@@ -250,16 +257,24 @@ export async function createPortableBackup(
     }
     const manifest: PortableManifest = {
       format: "drop-worker-portable-storage",
-      version: 2,
+      version: 3,
       migrationId: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
-      schemaVersion: 4,
+      schemaVersion: 5,
       secretFingerprint: secretFingerprint(secretValue(prefix)),
       items,
       shares: shares.map((share) => ({
         id: share.id,
         ownerId: share.ownerId,
-        itemId: share.itemId,
+        name: share.name,
+        members: share.members.map((member) => ({
+          itemId: member.itemId,
+          position: member.position,
+          addedAt: member.addedAt,
+          removedAt: member.removedAt,
+          removalReason: member.removalReason,
+          downloadCount: member.downloadCount,
+        })),
         tokenHash: share.tokenHash,
         accessMode: share.accessMode,
         codeHash: share.codeHash,
@@ -344,9 +359,30 @@ export async function restorePortableBackup(
     }
     const now = Date.now();
     for (const share of manifest.shares) {
+      // v2 备份中的单项分享在恢复时原地升级为单成员集合。
+      const members = share.members || (share.itemId ? [{
+        itemId: share.itemId,
+        position: 0,
+        addedAt: share.createdAt,
+        removedAt: null,
+        removalReason: null,
+        downloadCount: share.downloadCount,
+      }] : []);
       await storage.metadata.importPortableShare({
-        ...(share as Omit<StoredShare, "item">),
+        id: share.id,
+        ownerId: share.ownerId,
+        name: share.name,
+        tokenHash: share.tokenHash,
+        accessMode: share.accessMode,
+        codeHash: share.codeHash,
+        codeEncrypted: share.codeEncrypted,
+        createdAt: share.createdAt,
+        expiresAt: share.expiresAt,
         revokedAt: revokeShares ? now : share.revokedAt,
+        accessCount: share.accessCount,
+        downloadCount: share.downloadCount,
+        lastAccessedAt: share.lastAccessedAt,
+        members: members.map((member) => ({ ...member, item: null })),
       });
     }
     const [restoredItems, restoredShares] = await Promise.all([

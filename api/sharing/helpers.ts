@@ -5,7 +5,7 @@
  * 避免公开接口与属主管理接口各自实现一套校验。
  */
 import type { ShareStatus, ShareSummary } from "../../packages/contracts";
-import type { StoredShare } from "../platform";
+import type { StoredItem, StoredShare, StoredShareMember } from "../platform";
 import { readCookie } from "../auth/shared";
 
 const encoder = new TextEncoder();
@@ -134,16 +134,35 @@ export function randomShareCode(): string {
 }
 
 export function shareStatus(share: StoredShare, now: number): ShareStatus {
-  if (share.revokedAt !== null || share.item.deletedAt !== null) return "revoked";
+  if (share.revokedAt !== null || activeShareMembers(share).length === 0) return "revoked";
   return share.expiresAt <= now ? "expired" : "active";
 }
 
-function itemLabel(share: StoredShare): string {
-  if (share.item.type === "file") {
-    return share.item.displayName || share.item.originalName || "未命名文件";
+function itemLabel(item: StoredItem): string {
+  if (item.type === "file") {
+    return item.displayName || item.originalName || "未命名文件";
   }
-  const content = share.item.content?.trim() || "未命名文本";
+  const content = item.content?.trim() || "未命名文本";
   return content.length > 80 ? `${content.slice(0, 80)}…` : content;
+}
+
+/** 公开访问和管理摘要只消费仍有效且未进回收站的成员。 */
+export function activeShareMembers(share: StoredShare): Array<StoredShareMember & { item: StoredItem }> {
+  return share.members.filter(
+    (member): member is StoredShareMember & { item: StoredItem } =>
+      member.removedAt === null && member.item !== null && member.item.deletedAt === null
+        && (member.item.type === "text" || member.item.type === "file"),
+  );
+}
+
+/** 自定义名称保持稳定；自动名称始终跟随当前首个成员和成员数量。 */
+export function shareDisplayName(share: StoredShare): string {
+  if (share.name?.trim()) return share.name.trim();
+  const members = activeShareMembers(share);
+  const first = members[0]?.item;
+  if (!first) return "已终止的分享集合";
+  const label = itemLabel(first);
+  return members.length === 1 ? label : `${label} 等 ${members.length} 项`;
 }
 
 export function shareSummary(
@@ -154,14 +173,23 @@ export function shareSummary(
   code?: string | null,
 ): ShareSummary {
   const status = shareStatus(share, now);
+  const members = activeShareMembers(share);
   const shareUrl = status === "active" && token
     ? new URL(`/s/${token}`, publicUrl).toString()
     : null;
   return {
     id: share.id,
-    itemId: share.itemId,
-    itemType: share.item.type === "file" ? "file" : "text",
-    itemLabel: itemLabel(share),
+    name: shareDisplayName(share),
+    customName: share.name,
+    members: members.map((member) => ({
+      itemId: member.itemId,
+      itemType: member.item.type === "file" ? "file" as const : "text" as const,
+      itemLabel: itemLabel(member.item),
+      position: member.position,
+      addedAt: member.addedAt,
+      downloadCount: member.downloadCount,
+    })),
+    itemCount: members.length,
     accessMode: share.accessMode,
     status,
     createdAt: share.createdAt,

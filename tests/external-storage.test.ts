@@ -86,7 +86,8 @@ test("SQLite 与本地对象可以离线迁移到真实外部存储", { skip: !e
     await sourceMetadata.store.createShare({
       id: shareId,
       ownerId: "migration-owner",
-      itemId: item.id,
+      itemIds: [item.id],
+      name: null,
       tokenHash: await keyedDigest(PORTABLE_SECRET, "share-token-hash", shareToken),
       accessMode: "public",
       codeHash: null,
@@ -203,7 +204,7 @@ test("真实关系型数据库与 S3 完成上传、分享和 Range 下载", { s
     })).json()) as CreateShareResponse;
     const token = new URL(share.shareUrl).pathname.split("/").at(-1)!;
     const info = (await (await call(services, `/api/public/shares/${token}`)).json()) as PublicShareContent;
-    assert.equal(info.type, "file");
+    assert.equal(info.members[0]?.type, "file");
     const range = await call(services, `/api/public/shares/${token}/download`, {
       headers: { range: "bytes=9-15" },
     });
@@ -224,8 +225,8 @@ test("真实关系型数据库与 S3 完成上传、分享和 Range 下载", { s
       const rotatedToken = new URL(shareUrl).pathname.split("/").at(-1)!;
       return call(services, `/api/public/shares/${rotatedToken}`).then((response) => response.status);
     }));
-    assert.equal(rotatedStatuses.filter((status) => status === 200 || status === 401).length, 1);
-    assert.equal(rotatedStatuses.filter((status) => status === 404).length, 1);
+    assert.equal(rotatedStatuses.filter((status) => status === 200 || status === 401).length, 2);
+    assert.equal(rotatedStatuses.filter((status) => status === 404).length, 0);
     const protectedShare = (await (await call(services, `/api/items/${item.id}/share`, {
       method: "POST",
       body: JSON.stringify({ accessMode: "code", code: "0042", expiresInSeconds: 604_800 }),

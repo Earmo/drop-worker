@@ -1,7 +1,8 @@
-import type {
-  DropItem,
-  StorageSummary,
-  UploadedPart,
+import {
+  SHARE_MAX_ITEMS,
+  type DropItem,
+  type StorageSummary,
+  type UploadedPart,
 } from "../../packages/contracts";
 import { schemaStatements } from "../../db/sql";
 import type {
@@ -10,8 +11,10 @@ import type {
   ListOptions,
   MetadataStore,
   ShareAttemptRecord,
+  ShareMemberRemovalReason,
   StoredItem,
   StoredShare,
+  StoredShareMember,
   UploadRecord,
 } from "../platform";
 
@@ -67,31 +70,42 @@ type AuthChallengeRow = {
   expires_at: number;
 };
 
-type ShareJoinedRow = {
-  share_id: string;
-  share_owner_id: string;
-  share_item_id: string;
+type ShareRow = {
+  id: string;
+  owner_id: string;
+  name: string | null;
   token_hash: string;
   access_mode: "public" | "code";
   code_hash: string | null;
   code_encrypted: string | null;
-  share_created_at: number;
+  created_at: number;
   expires_at: number;
   revoked_at: number | null;
   access_count: number;
   download_count: number;
   last_accessed_at: number | null;
-  item_type: "text" | "link" | "file";
+};
+
+type ShareMemberJoinedRow = {
+  share_id: string;
+  item_id: string;
+  position: number;
+  added_at: number;
+  removed_at: number | null;
+  removal_reason: ShareMemberRemovalReason | null;
+  member_download_count: number;
+  item_owner_id: string | null;
+  item_type: "text" | "link" | "file" | null;
   item_content: string | null;
   item_title: string | null;
   item_object_key: string | null;
   item_original_name: string | null;
   item_display_name: string | null;
   item_mime_type: string | null;
-  item_size_bytes: number;
-  item_favorite: number;
-  item_created_at: number;
-  item_updated_at: number;
+  item_size_bytes: number | null;
+  item_favorite: number | null;
+  item_created_at: number | null;
+  item_updated_at: number | null;
   item_deleted_at: number | null;
 };
 
@@ -101,10 +115,13 @@ const ITEM_COLUMNS = `id, owner_id, type, content, title, object_key,
 const UPLOAD_COLUMNS = `id, owner_id, object_key, provider_upload_id, file_name,
   mime_type, size_bytes, fingerprint, parts_json, status, created_at,
   updated_at, expires_at`;
-const SHARE_JOIN_COLUMNS = `
-  s.id AS share_id, s.owner_id AS share_owner_id, s.item_id AS share_item_id,
-  s.token_hash, s.access_mode, s.code_hash, s.code_encrypted, s.created_at AS share_created_at,
-  s.expires_at, s.revoked_at, s.access_count, s.download_count, s.last_accessed_at,
+const SHARE_COLUMNS = `id, owner_id, name, token_hash, access_mode, code_hash,
+  code_encrypted, created_at, expires_at, revoked_at, access_count,
+  download_count, last_accessed_at`;
+const SHARE_MEMBER_JOIN_COLUMNS = `
+  sm.share_id, sm.item_id, sm.position, sm.added_at, sm.removed_at,
+  sm.removal_reason, sm.download_count AS member_download_count,
+  i.owner_id AS item_owner_id,
   i.type AS item_type, i.content AS item_content, i.title AS item_title,
   i.object_key AS item_object_key, i.original_name AS item_original_name,
   i.display_name AS item_display_name, i.mime_type AS item_mime_type,
@@ -186,37 +203,52 @@ function authChallengeFromRow(row: AuthChallengeRow): AuthChallengeRecord {
   };
 }
 
-function shareFromRow(row: ShareJoinedRow): StoredShare {
+function shareMemberFromRow(row: ShareMemberJoinedRow): StoredShareMember {
+  const hasItem = row.item_owner_id !== null && row.item_type !== null
+    && row.item_size_bytes !== null && row.item_favorite !== null
+    && row.item_created_at !== null && row.item_updated_at !== null;
   return {
-    id: row.share_id,
-    ownerId: row.share_owner_id,
-    itemId: row.share_item_id,
-    tokenHash: row.token_hash,
-    accessMode: row.access_mode,
-    codeHash: row.code_hash,
-    codeEncrypted: row.code_encrypted,
-    createdAt: row.share_created_at,
-    expiresAt: row.expires_at,
-    revokedAt: row.revoked_at,
-    accessCount: row.access_count,
-    downloadCount: row.download_count,
-    lastAccessedAt: row.last_accessed_at,
-    item: {
-      id: row.share_item_id,
-      ownerId: row.share_owner_id,
-      type: row.item_type,
+    itemId: row.item_id,
+    position: row.position,
+    addedAt: row.added_at,
+    removedAt: row.removed_at,
+    removalReason: row.removal_reason,
+    downloadCount: row.member_download_count,
+    item: hasItem ? {
+      id: row.item_id,
+      ownerId: row.item_owner_id!,
+      type: row.item_type!,
       content: row.item_content,
       title: row.item_title,
       objectKey: row.item_object_key,
       originalName: row.item_original_name,
       displayName: row.item_display_name,
       mimeType: row.item_mime_type,
-      sizeBytes: row.item_size_bytes,
+      sizeBytes: row.item_size_bytes!,
       favorite: row.item_favorite === 1,
-      createdAt: row.item_created_at,
-      updatedAt: row.item_updated_at,
+      createdAt: row.item_created_at!,
+      updatedAt: row.item_updated_at!,
       deletedAt: row.item_deleted_at,
-    },
+    } : null,
+  };
+}
+
+function shareFromRow(row: ShareRow, members: StoredShareMember[]): StoredShare {
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    name: row.name,
+    tokenHash: row.token_hash,
+    accessMode: row.access_mode,
+    codeHash: row.code_hash,
+    codeEncrypted: row.code_encrypted,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    accessCount: row.access_count,
+    downloadCount: members.reduce((total, member) => total + member.downloadCount, 0),
+    lastAccessedAt: row.last_accessed_at,
+    members,
   };
 }
 
@@ -255,19 +287,31 @@ export class SqlMetadataStore implements MetadataStore {
       } catch (error) {
         if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
       }
-      await this.sql.run("UPDATE schema_version SET version = 4 WHERE id = 1 AND version < 4");
+      try {
+        await this.sql.run("ALTER TABLE shares ADD COLUMN name TEXT");
+      } catch (error) {
+        if (!(error instanceof Error) || !/duplicate column name/i.test(error.message)) throw error;
+      }
+      // 每条旧分享成为一个单成员集合；历史下载次数迁移到成员后即可按成员保留。
+      await this.sql.run(
+        `INSERT OR IGNORE INTO share_members (
+          share_id, item_id, position, added_at, removed_at, removal_reason, download_count
+        ) SELECT id, item_id, 0, created_at, NULL, NULL, download_count FROM shares`,
+      );
+      await this.sql.run("UPDATE schema_version SET version = 5 WHERE id = 1 AND version < 5");
       this.schemaReady = true;
       return;
     }
-    const [itemsExist, sharesExist, versionTableExists] = await Promise.all([
+    const [itemsExist, sharesExist, membersExist, versionTableExists] = await Promise.all([
       this.sql.tableExists("items"),
       this.sql.tableExists("shares"),
+      this.sql.tableExists("share_members"),
       this.sql.tableExists("schema_version"),
     ]);
     const schemaVersion = versionTableExists
       ? await this.sql.first<{ version: number }>("SELECT version FROM schema_version WHERE id = 1")
       : null;
-    if (!itemsExist || !sharesExist || !schemaVersion || schemaVersion.version !== 4) {
+    if (!itemsExist || !sharesExist || !membersExist || !schemaVersion || schemaVersion.version !== 5) {
       throw new Error("数据库架构尚未迁移，请先应用正式迁移");
     }
     this.schemaReady = true;
@@ -426,9 +470,20 @@ export class SqlMetadataStore implements MetadataStore {
     const [result] = await this.sql.batch([
       updateItem,
       {
+        sql: `UPDATE share_members SET removed_at = ?, removal_reason = 'trash'
+          WHERE removed_at IS NULL AND item_id IN (${placeholders})
+            AND item_id IN (SELECT id FROM items WHERE owner_id = ? AND deleted_at IS NOT NULL)
+            AND share_id IN (SELECT id FROM shares WHERE owner_id = ?)`,
+        params: [now, ...ids, ownerId, ownerId],
+      },
+      {
         sql: `UPDATE shares SET revoked_at = ?
-          WHERE owner_id = ? AND item_id IN (${placeholders}) AND revoked_at IS NULL`,
-        params: [now, ownerId, ...ids],
+          WHERE owner_id = ? AND revoked_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM share_members sm
+              WHERE sm.share_id = shares.id AND sm.removed_at IS NULL
+            )`,
+        params: [now, ownerId],
       },
     ]);
     return result?.changes ?? 0;
@@ -450,18 +505,11 @@ export class SqlMetadataStore implements MetadataStore {
     if (!item?.deletedAt || item.deletedAt >= 0) return null;
     const results = await this.sql.batch([
       {
-        sql: `DELETE FROM share_attempts WHERE share_id IN (
-          SELECT id FROM shares WHERE owner_id = ? AND item_id = ?
-        )`,
-        params: [ownerId, id],
-      },
-      { sql: "DELETE FROM shares WHERE owner_id = ? AND item_id = ?", params: [ownerId, id] },
-      {
         sql: "DELETE FROM items WHERE owner_id = ? AND id = ? AND deleted_at < 0",
         params: [ownerId, id],
       },
     ]);
-    const result = results[2];
+    const result = results[0];
     return result.changes > 0 ? item : null;
   }
 
@@ -731,20 +779,51 @@ export class SqlMetadataStore implements MetadataStore {
     return rows.map(itemFromRow).map(publicItem);
   }
 
+  private async sharesFromRows(rows: ShareRow[]): Promise<StoredShare[]> {
+    if (rows.length === 0) return [];
+    const placeholders = rows.map(() => "?").join(", ");
+    const memberRows = await this.sql.all<ShareMemberJoinedRow>(
+      `SELECT ${SHARE_MEMBER_JOIN_COLUMNS}
+       FROM share_members sm
+       JOIN shares s ON s.id = sm.share_id
+       LEFT JOIN items i ON i.id = sm.item_id AND i.owner_id = s.owner_id
+       WHERE sm.share_id IN (${placeholders})
+       ORDER BY sm.share_id ASC, sm.position ASC, sm.item_id ASC`,
+      rows.map((row) => row.id),
+    );
+    const membersByShare = new Map<string, StoredShareMember[]>();
+    for (const memberRow of memberRows) {
+      const members = membersByShare.get(memberRow.share_id) || [];
+      members.push(shareMemberFromRow(memberRow));
+      membersByShare.set(memberRow.share_id, members);
+    }
+    return rows.map((row) => shareFromRow(row, membersByShare.get(row.id) || []));
+  }
+
   private async getShareById(id: string): Promise<StoredShare | null> {
-    const row = await this.sql.first<ShareJoinedRow>(
-      `SELECT ${SHARE_JOIN_COLUMNS}
-       FROM shares s JOIN items i ON i.id = s.item_id AND i.owner_id = s.owner_id
-       WHERE s.id = ?`,
+    const row = await this.sql.first<ShareRow>(
+      `SELECT ${SHARE_COLUMNS} FROM shares WHERE id = ?`,
       [id],
     );
-    return row ? shareFromRow(row) : null;
+    return row ? (await this.sharesFromRows([row]))[0] || null : null;
+  }
+
+  private async validShareItems(ownerId: string, itemIds: string[]): Promise<boolean> {
+    if (itemIds.length === 0 || itemIds.length > SHARE_MAX_ITEMS) return false;
+    const placeholders = itemIds.map(() => "?").join(", ");
+    const rows = await this.sql.all<{ id: string }>(
+      `SELECT id FROM items WHERE owner_id = ? AND deleted_at IS NULL
+       AND type IN ('text', 'file') AND id IN (${placeholders})`,
+      [ownerId, ...itemIds],
+    );
+    return rows.length === itemIds.length;
   }
 
   async createShare(input: {
     id: string;
     ownerId: string;
-    itemId: string;
+    itemIds: string[];
+    name: string | null;
     tokenHash: string;
     accessMode: "public" | "code";
     codeHash: string | null;
@@ -752,77 +831,113 @@ export class SqlMetadataStore implements MetadataStore {
     now: number;
     expiresAt: number;
   }): Promise<StoredShare | null> {
-    return this.withOperationLock(
-      `share:${input.ownerId}:${input.itemId}`,
-      () => this.createShareUnlocked(input),
-    );
+    return this.withOperationLock(`share-owner:${input.ownerId}`, async () => {
+      const itemIds = [...new Set(input.itemIds)];
+      if (!(await this.validShareItems(input.ownerId, itemIds))) return null;
+      const statements: Array<{ sql: string; params?: SqlValue[] }> = [{
+        sql: `INSERT INTO shares (
+          id, owner_id, name, item_id, token_hash, access_mode, code_hash, code_encrypted,
+          created_at, expires_at, revoked_at, access_count, download_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0)`,
+        params: [
+          input.id, input.ownerId, input.name, itemIds[0]!, input.tokenHash,
+          input.accessMode, input.codeHash, input.codeEncrypted ?? null,
+          input.now, input.expiresAt,
+        ],
+      }];
+      itemIds.forEach((itemId, position) => statements.push({
+        sql: `INSERT INTO share_members (
+          share_id, item_id, position, added_at, removed_at, removal_reason, download_count
+        ) VALUES (?, ?, ?, ?, NULL, NULL, 0)`,
+        params: [input.id, itemId, position, input.now],
+      }));
+      await this.sql.batch(statements);
+      return this.getShareById(input.id);
+    });
   }
 
-  private async createShareUnlocked(input: {
-    id: string;
-    ownerId: string;
-    itemId: string;
-    tokenHash: string;
-    accessMode: "public" | "code";
-    codeHash: string | null;
-    codeEncrypted?: string | null;
-    now: number;
-    expiresAt: number;
-  }): Promise<StoredShare | null> {
-    const results = await this.sql.batch([
-      {
-        sql: `UPDATE shares SET revoked_at = ?
-          WHERE owner_id = ? AND item_id = ? AND revoked_at IS NULL AND expires_at > ?`,
-        params: [input.now, input.ownerId, input.itemId, input.now],
-      },
-      {
-        sql: `INSERT INTO shares (
-          id, owner_id, item_id, token_hash, access_mode, code_hash, code_encrypted,
-          created_at, expires_at, revoked_at, access_count, download_count
-        ) SELECT ?, ?, id, ?, ?, ?, ?, ?, ?, NULL, 0, 0
-          FROM items
-          WHERE id = ? AND owner_id = ? AND deleted_at IS NULL AND type IN ('text', 'file')`,
-        params: [
-          input.id,
-          input.ownerId,
-          input.tokenHash,
-          input.accessMode,
-          input.codeHash,
-          input.codeEncrypted ?? null,
-          input.now,
-          input.expiresAt,
-          input.itemId,
-          input.ownerId,
-        ],
-      },
-    ]);
-    if ((results[1]?.changes ?? 0) === 0) return null;
-    return this.getShareById(input.id);
+  async updateShare(
+    ownerId: string,
+    id: string,
+    changes: { name?: string | null; itemIds?: string[] },
+    now: number,
+  ): Promise<StoredShare | null> {
+    return this.withOperationLock(`share:${id}`, async () => {
+      const current = await this.getShareById(id);
+      if (!current || current.ownerId !== ownerId || current.revokedAt !== null || current.expiresAt <= now) {
+        return null;
+      }
+      const itemIds = changes.itemIds === undefined ? undefined : [...new Set(changes.itemIds)];
+      if (itemIds && itemIds.length > 0 && !(await this.validShareItems(ownerId, itemIds))) return null;
+      if (itemIds && itemIds.length > SHARE_MAX_ITEMS) return null;
+
+      const statements: Array<{ sql: string; params?: SqlValue[] }> = [];
+      if (changes.name !== undefined) {
+        statements.push({
+          sql: "UPDATE shares SET name = ? WHERE id = ? AND owner_id = ?",
+          params: [changes.name, id, ownerId],
+        });
+      }
+      if (itemIds !== undefined) {
+        const desired = new Set(itemIds);
+        const activeMembers = current.members.filter((member) => member.removedAt === null);
+        for (const member of activeMembers) {
+          if (!desired.has(member.itemId)) {
+            statements.push({
+              sql: `UPDATE share_members SET removed_at = ?, removal_reason = 'manual'
+                WHERE share_id = ? AND item_id = ? AND removed_at IS NULL`,
+              params: [now, id, member.itemId],
+            });
+          }
+        }
+        const activeIds = new Set(activeMembers.map((member) => member.itemId));
+        let position = current.members.reduce((maximum, member) => Math.max(maximum, member.position), -1) + 1;
+        for (const itemId of itemIds) {
+          if (activeIds.has(itemId)) continue;
+          statements.push({
+            sql: `UPDATE share_members SET position = ?, added_at = ?, removed_at = NULL, removal_reason = NULL
+              WHERE share_id = ? AND item_id = ?`,
+            params: [position, now, id, itemId],
+          });
+          statements.push({
+            sql: `INSERT OR IGNORE INTO share_members (
+              share_id, item_id, position, added_at, removed_at, removal_reason, download_count
+            ) VALUES (?, ?, ?, ?, NULL, NULL, 0)`,
+            params: [id, itemId, position, now],
+          });
+          position += 1;
+        }
+        statements.push({
+          sql: `UPDATE shares SET revoked_at = ? WHERE id = ? AND owner_id = ? AND revoked_at IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM share_members sm JOIN items i ON i.id = sm.item_id
+              WHERE sm.share_id = shares.id AND sm.removed_at IS NULL
+                AND i.owner_id = shares.owner_id AND i.deleted_at IS NULL
+            )`,
+          params: [now, id, ownerId],
+        });
+      }
+      if (statements.length > 0) await this.sql.batch(statements);
+      return this.getShareById(id);
+    });
   }
 
   async listShares(ownerId: string, now: number, historyAfter: number): Promise<StoredShare[]> {
-    const rows = await this.sql.all<ShareJoinedRow>(
-      `SELECT ${SHARE_JOIN_COLUMNS}
-       FROM shares s JOIN items i ON i.id = s.item_id AND i.owner_id = s.owner_id
-       WHERE s.owner_id = ? AND (
-         (s.revoked_at IS NULL AND s.expires_at > ?)
-         OR s.expires_at >= ? OR s.revoked_at >= ?
-       )
-       ORDER BY CASE WHEN s.revoked_at IS NULL AND s.expires_at > ? THEN 0 ELSE 1 END,
-         s.created_at DESC, s.id DESC`,
-      [ownerId, now, historyAfter, historyAfter, now],
+    const rows = await this.sql.all<ShareRow>(
+      `SELECT ${SHARE_COLUMNS} FROM shares
+       WHERE owner_id = ? AND revoked_at IS NULL AND (expires_at > ? OR expires_at >= ?)
+       ORDER BY CASE WHEN expires_at > ? THEN 0 ELSE 1 END, created_at DESC, id DESC`,
+      [ownerId, now, historyAfter, now],
     );
-    return rows.map(shareFromRow);
+    return this.sharesFromRows(rows);
   }
 
   async getShareByTokenHash(tokenHash: string): Promise<StoredShare | null> {
-    const row = await this.sql.first<ShareJoinedRow>(
-      `SELECT ${SHARE_JOIN_COLUMNS}
-       FROM shares s JOIN items i ON i.id = s.item_id AND i.owner_id = s.owner_id
-       WHERE s.token_hash = ?`,
+    const row = await this.sql.first<ShareRow>(
+      `SELECT ${SHARE_COLUMNS} FROM shares WHERE token_hash = ?`,
       [tokenHash],
     );
-    return row ? shareFromRow(row) : null;
+    return row ? (await this.sharesFromRows([row]))[0] || null : null;
   }
 
   async revokeShare(ownerId: string, id: string, now: number): Promise<StoredShare | null> {
@@ -834,12 +949,24 @@ export class SqlMetadataStore implements MetadataStore {
     return this.getShareById(id);
   }
 
-  async recordShareAccess(id: string, now: number, download: boolean): Promise<void> {
+  async recordShareAccess(id: string, now: number): Promise<void> {
     await this.sql.run(
-      `UPDATE shares SET access_count = access_count + ?, download_count = download_count + ?,
-        last_accessed_at = ? WHERE id = ? AND revoked_at IS NULL AND expires_at > ?`,
-      [download ? 0 : 1, download ? 1 : 0, now, id, now],
+      `UPDATE shares SET access_count = access_count + 1, last_accessed_at = ?
+       WHERE id = ? AND revoked_at IS NULL AND expires_at > ?`,
+      [now, id, now],
     );
+  }
+
+  async recordShareDownload(id: string, itemId: string, now: number): Promise<void> {
+    const result = await this.sql.run(
+      `UPDATE share_members SET download_count = download_count + 1
+       WHERE share_id = ? AND item_id = ? AND removed_at IS NULL
+         AND EXISTS (SELECT 1 FROM shares WHERE id = ? AND revoked_at IS NULL AND expires_at > ?)`,
+      [id, itemId, id, now],
+    );
+    if (result.changes > 0) {
+      await this.sql.run("UPDATE shares SET last_accessed_at = ? WHERE id = ?", [now, id]);
+    }
   }
 
   async getShareAttempt(shareId: string, sourceHash: string): Promise<ShareAttemptRecord | null> {
@@ -926,6 +1053,14 @@ export class SqlMetadataStore implements MetadataStore {
       { sql: "DELETE FROM share_attempts WHERE updated_at <= ?", params: [attemptsBefore] },
       {
         sql: `DELETE FROM share_attempts WHERE share_id IN (
+          SELECT id FROM shares
+          WHERE (revoked_at IS NOT NULL AND revoked_at <= ?)
+             OR (revoked_at IS NULL AND expires_at <= ?)
+        )`,
+        params: [before, before],
+      },
+      {
+        sql: `DELETE FROM share_members WHERE share_id IN (
           SELECT id FROM shares
           WHERE (revoked_at IS NOT NULL AND revoked_at <= ?)
              OR (revoked_at IS NULL AND expires_at <= ?)
@@ -1027,7 +1162,9 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async isPortableTargetEmpty(): Promise<boolean> {
-    const tables = ["items", "uploads", "shares", "local_sessions", "auth_challenges", "share_attempts"];
+    const tables = [
+      "items", "uploads", "shares", "share_members", "local_sessions", "auth_challenges", "share_attempts",
+    ];
     for (const table of tables) {
       const row = await this.sql.first<{ count_value: number }>(`SELECT COUNT(*) AS count_value FROM ${table}`);
       if (Number(row?.count_value || 0) > 0) return false;
@@ -1043,12 +1180,10 @@ export class SqlMetadataStore implements MetadataStore {
   }
 
   async listPortableShares(): Promise<StoredShare[]> {
-    const rows = await this.sql.all<ShareJoinedRow>(
-      `SELECT ${SHARE_JOIN_COLUMNS}
-       FROM shares s JOIN items i ON i.id = s.item_id AND i.owner_id = s.owner_id
-       ORDER BY s.created_at ASC, s.id ASC`,
+    const rows = await this.sql.all<ShareRow>(
+      `SELECT ${SHARE_COLUMNS} FROM shares ORDER BY created_at ASC, id ASC`,
     );
-    return rows.map(shareFromRow);
+    return this.sharesFromRows(rows);
   }
 
   async listPortablePendingUploads(): Promise<UploadRecord[]> {
@@ -1078,18 +1213,33 @@ export class SqlMetadataStore implements MetadataStore {
     );
   }
 
-  async importPortableShare(share: Omit<StoredShare, "item">): Promise<void> {
-    await this.sql.run(
+  async importPortableShare(share: StoredShare): Promise<void> {
+    const legacyItemId = share.members[0]?.itemId;
+    if (!legacyItemId) return;
+    const statements: Array<{ sql: string; params?: SqlValue[] }> = [{
+      sql:
       `INSERT OR IGNORE INTO shares (
-        id, owner_id, item_id, token_hash, access_mode, code_hash, code_encrypted,
+        id, owner_id, name, item_id, token_hash, access_mode, code_hash, code_encrypted,
         created_at, expires_at, revoked_at, access_count, download_count, last_accessed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        share.id, share.ownerId, share.itemId, share.tokenHash, share.accessMode,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      params: [
+        share.id, share.ownerId, share.name, legacyItemId, share.tokenHash, share.accessMode,
         share.codeHash, share.codeEncrypted, share.createdAt, share.expiresAt, share.revokedAt,
         share.accessCount, share.downloadCount, share.lastAccessedAt,
       ],
-    );
+    }];
+    for (const member of share.members) {
+      statements.push({
+        sql: `INSERT OR IGNORE INTO share_members (
+          share_id, item_id, position, added_at, removed_at, removal_reason, download_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        params: [
+          share.id, member.itemId, member.position, member.addedAt, member.removedAt,
+          member.removalReason, member.downloadCount,
+        ],
+      });
+    }
+    await this.sql.batch(statements);
   }
 
   async preparePortableImport(migrationId: string, now: number, blobsEmpty: boolean): Promise<"new" | "resume" | "rejected"> {

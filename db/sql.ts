@@ -4,8 +4,8 @@ export const schemaStatements = [
     id INTEGER PRIMARY KEY,
     version INTEGER NOT NULL
   )`,
-  `INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 3)`,
-  `UPDATE schema_version SET version = 3 WHERE id = 1 AND version < 3`,
+  `INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 5)`,
+  `UPDATE schema_version SET version = 5 WHERE id = 1 AND version < 5`,
   `CREATE TABLE IF NOT EXISTS migration_state (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -75,6 +75,8 @@ export const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS shares (
     id TEXT PRIMARY KEY,
     owner_id TEXT NOT NULL,
+    name TEXT,
+    -- item_id 仅用于兼容历史单项分享；有效成员由 share_members 维护。
     item_id TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     access_mode TEXT NOT NULL CHECK (access_mode IN ('public', 'code')),
@@ -91,6 +93,21 @@ export const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS idx_shares_owner_created ON shares(owner_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_shares_item_status ON shares(item_id, revoked_at, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_shares_retention ON shares(expires_at, revoked_at)`,
+  // 成员取消后保留关系与下载统计；removed_at 为 NULL 表示当前仍在集合中。
+  `CREATE TABLE IF NOT EXISTS share_members (
+    share_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    removed_at INTEGER,
+    removal_reason TEXT,
+    download_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (share_id, item_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_share_members_share_active
+    ON share_members(share_id, removed_at, position)`,
+  `CREATE INDEX IF NOT EXISTS idx_share_members_item_active
+    ON share_members(item_id, removed_at)`,
   `CREATE TABLE IF NOT EXISTS share_attempts (
     share_id TEXT NOT NULL,
     source_hash TEXT NOT NULL,
