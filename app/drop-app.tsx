@@ -2,7 +2,9 @@
 
 import {
   ArchiveRestore,
+  ArrowDown,
   ArrowDownToLine,
+  ArrowUp,
   Check,
   CheckSquare2,
   Clipboard,
@@ -25,6 +27,7 @@ import {
   RotateCcw,
   Search,
   Send,
+  Settings2,
   Share2,
   ShieldCheck,
   Sparkles,
@@ -34,7 +37,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AuthStatus,
   CreateShareResponse,
@@ -60,6 +63,7 @@ import {
 
 type View = "timeline" | "favorites" | "shares" | "cleanup" | "trash";
 type Theme = "system" | "light" | "dark";
+type TimelineOrder = "newest-top" | "newest-bottom";
 function TypeIcon({ type }: { type: ItemType }) {
   if (type === "text") return <FileText size={17} />;
   if (type === "link") return <Link2 size={17} />;
@@ -89,6 +93,8 @@ export function DropApp() {
   const [uploads, setUploads] = useState<UploadTask[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>("system");
+  const [timelineOrder, setTimelineOrder] = useState<TimelineOrder>("newest-bottom");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [clock, setClock] = useState(0);
   const [cleanupAge, setCleanupAge] = useState("all");
   const [cleanupSize, setCleanupSize] = useState("all");
@@ -97,13 +103,20 @@ export function DropApp() {
   const [shareTargets, setShareTargets] = useState<DropItem[]>([]);
   const [editingShare, setEditingShare] = useState<ShareSummary | null>(null);
   const refreshVersion = useRef(0);
+  const feedScrollRef = useRef<HTMLElement>(null);
+  const historyLoaderRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRequest = useRef(false);
+  const historyScrollAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const timelineNewestAtBottom = view === "timeline" && timelineOrder === "newest-bottom";
 
   useEffect(() => {
     // 首屏只做一次浏览器侧初始化：主题、断点续传队列、分享参数和 Service Worker。
     const storedTheme = (localStorage.getItem("drop-worker.theme") as Theme | null) || "system";
+    const storedTimelineOrder = localStorage.getItem("drop-worker.timeline-order");
     document.documentElement.dataset.theme = storedTheme;
     queueMicrotask(() => {
       setTheme(storedTheme);
+      setTimelineOrder(storedTimelineOrder === "newest-top" ? "newest-top" : "newest-bottom");
       setUploads(readSavedUploads().map((task) => ({ ...task, status: "paused" })));
       const parameters = new URLSearchParams(window.location.search);
       if (parameters.get("share") === "1") {
@@ -186,9 +199,18 @@ export function DropApp() {
     [auth?.authenticated, listParams, showNotice],
   );
 
-  const loadMore = async () => {
-    if (nextCursor === null || loadingMore) return;
+  const loadMore = useCallback(async () => {
+    if (nextCursor === null || loadingMoreRequest.current) return;
+    loadingMoreRequest.current = true;
     setLoadingMore(true);
+    const scrollContainer = timelineNewestAtBottom ? feedScrollRef.current : null;
+    if (scrollContainer) {
+      // 历史项会插入可见列表顶部；记录高度差，渲染后把用户仍锚定在原来的第一条内容上。
+      historyScrollAnchor.current = {
+        scrollHeight: scrollContainer.scrollHeight,
+        scrollTop: scrollContainer.scrollTop,
+      };
+    }
     try {
       // 使用服务端返回的 offset cursor 追加下一页，并按 id 去重。
       const list = await api<ListItemsResponse>(`/api/items?${listParams(nextCursor)}`);
@@ -198,11 +220,39 @@ export function DropApp() {
       });
       setNextCursor(list.nextCursor);
     } catch (error) {
+      historyScrollAnchor.current = null;
       showNotice(error instanceof Error ? error.message : "加载更多失败");
     } finally {
+      loadingMoreRequest.current = false;
       setLoadingMore(false);
     }
-  };
+  }, [listParams, nextCursor, showNotice, timelineNewestAtBottom]);
+
+  useLayoutEffect(() => {
+    const anchor = historyScrollAnchor.current;
+    if (!anchor) return;
+    const scrollContainer = feedScrollRef.current;
+    if (scrollContainer) {
+      scrollContainer.scrollTop = anchor.scrollTop + scrollContainer.scrollHeight - anchor.scrollHeight;
+    }
+    historyScrollAnchor.current = null;
+  }, [items]);
+
+  useEffect(() => {
+    if (!timelineNewestAtBottom || loading || loadingMore || nextCursor === null) return;
+    const scrollContainer = feedScrollRef.current;
+    const loader = historyLoaderRef.current;
+    if (!scrollContainer || !loader || !("IntersectionObserver" in window)) return;
+    // 接近时间流顶部时自动取下一页；较短列表会持续补齐，直到填满视口或没有更多历史。
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) void loadMore();
+      },
+      { root: scrollContainer, rootMargin: "140px 0px 0px", threshold: 0 },
+    );
+    observer.observe(loader);
+    return () => observer.disconnect();
+  }, [loadMore, loading, loadingMore, nextCursor, timelineNewestAtBottom]);
 
   useEffect(() => {
     // 认证状态变化后异步加载，避免在 render 阶段触发请求；清理 timer 防止卸载后更新状态。
@@ -222,6 +272,12 @@ export function DropApp() {
     setTheme(next);
     localStorage.setItem("drop-worker.theme", next);
     document.documentElement.dataset.theme = next;
+  };
+
+  const changeTimelineOrder = (next: TimelineOrder) => {
+    setTimelineOrder(next);
+    setSelected(new Set());
+    localStorage.setItem("drop-worker.timeline-order", next);
   };
 
   const changeView = (next: View) => {
@@ -455,6 +511,18 @@ export function DropApp() {
     });
   }, [cleanupAge, cleanupSize, clock, items, view]);
 
+  const orderedVisibleItems = useMemo(
+    () => (timelineNewestAtBottom ? [...visibleItems].reverse() : visibleItems),
+    [timelineNewestAtBottom, visibleItems],
+  );
+  const newestTimelineItemId = items[0]?.id ?? null;
+
+  useLayoutEffect(() => {
+    if (!timelineNewestAtBottom || loading || historyScrollAnchor.current) return;
+    const scrollContainer = feedScrollRef.current;
+    if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
+  }, [loading, newestTimelineItemId, query, timelineNewestAtBottom, type]);
+
   const duplicateIds = useMemo(() => {
     // 疑似重复只用于提示，不自动删除：文件名和大小相同不代表内容一定相同。
     const groups = new Map<string, string[]>();
@@ -498,6 +566,18 @@ export function DropApp() {
           : view === "cleanup"
             ? "存储清理"
             : "回收站";
+  const timelineComposer = view === "timeline" ? (
+    <Composer
+      key={sharedDraft}
+      initialText={sharedDraft}
+      pendingFiles={pendingFiles}
+      onFiles={setPendingFiles}
+      onSubmit={submitComposer}
+    />
+  ) : null;
+  const uploadQueue = uploads.length > 0 ? (
+    <UploadQueue tasks={uploads} onResume={resumeUpload} onCancel={cancelUpload} />
+  ) : null;
 
   return (
     <div className="app-shell">
@@ -510,13 +590,14 @@ export function DropApp() {
         storage={storage}
         theme={theme}
         onTheme={changeTheme}
+        onSettings={() => setSettingsOpen(true)}
         onLogout={async () => {
           await api("/api/auth/logout", { method: "POST", body: "{}" }).catch(() => undefined);
           setAuth(await loadAuth());
         }}
       />
 
-      <main className="workspace">
+      <main className={`workspace${timelineNewestAtBottom ? " timeline-bottom-workspace" : ""}`}>
         <header className="workspace-header">
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航">
             <Menu size={19} />
@@ -547,20 +628,9 @@ export function DropApp() {
           </div>
         )}
 
-        <section className="workspace-body">
-          {view === "timeline" && (
-            <Composer
-              key={sharedDraft}
-              initialText={sharedDraft}
-              pendingFiles={pendingFiles}
-              onFiles={setPendingFiles}
-              onSubmit={submitComposer}
-            />
-          )}
-
-          {uploads.length > 0 && (
-            <UploadQueue tasks={uploads} onResume={resumeUpload} onCancel={cancelUpload} />
-          )}
+        <section className={`workspace-body${timelineNewestAtBottom ? " timeline-bottom-layout" : ""}`}>
+          {!timelineNewestAtBottom && timelineComposer}
+          {!timelineNewestAtBottom && uploadQueue}
 
           {view === "cleanup" && storage && (
             <>
@@ -602,7 +672,10 @@ export function DropApp() {
             />
           )}
 
-          {view !== "shares" && <><div className="feed-toolbar">
+          {view !== "shares" && <section
+            className={`feed-region${timelineNewestAtBottom ? " newest-bottom" : ""}`}
+            ref={timelineNewestAtBottom ? feedScrollRef : undefined}
+          ><div className="feed-toolbar">
             <div className="segmented" aria-label="类型筛选">
               {(["all", "text", "link", "file"] as const).map((value) => (
                 <button
@@ -667,13 +740,25 @@ export function DropApp() {
             </div>
           )}
 
-          <section className="feed" aria-busy={loading}>
+          {timelineNewestAtBottom && nextCursor !== null && !loading && (
+            <div className="load-more-row history-loader" ref={historyLoaderRef}>
+              <button onClick={() => void loadMore()} disabled={loadingMore}>
+                {loadingMore ? <LoaderCircle className="spin" size={16} /> : <ArrowUp size={16} />}
+                {loadingMore ? "正在加载更早内容" : "加载更早内容"}
+              </button>
+            </div>
+          )}
+
+          <section
+            className={`feed${timelineNewestAtBottom && !loading && visibleItems.length === 0 ? " is-empty" : ""}`}
+            aria-busy={loading}
+          >
             {loading ? (
               <FeedLoading />
             ) : visibleItems.length === 0 ? (
               <EmptyState view={view} query={query} />
             ) : (
-              visibleItems.map((item) => (
+              orderedVisibleItems.map((item) => (
                 <ItemEntry
                   key={item.id}
                   item={item}
@@ -700,14 +785,16 @@ export function DropApp() {
               ))
             )}
           </section>
-          {nextCursor !== null && !loading && (
+          {!timelineNewestAtBottom && nextCursor !== null && !loading && (
             <div className="load-more-row">
               <button onClick={() => void loadMore()} disabled={loadingMore}>
                 {loadingMore ? <LoaderCircle className="spin" size={16} /> : <ArchiveRestore size={16} />}
                 {loadingMore ? "正在加载" : "加载更多"}
               </button>
             </div>
-          )}</>}
+          )}</section>}
+          {timelineNewestAtBottom && uploadQueue}
+          {timelineNewestAtBottom && timelineComposer}
         </section>
       </main>
 
@@ -732,6 +819,13 @@ export function DropApp() {
           }}
         />
       )}
+      {settingsOpen && (
+        <TimelineSettingsDialog
+          order={timelineOrder}
+          onChange={changeTimelineOrder}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
       <MobileNav view={view} onView={changeView} />
     </div>
   );
@@ -746,6 +840,7 @@ function Sidebar({
   storage,
   theme,
   onTheme,
+  onSettings,
   onLogout,
 }: {
   view: View;
@@ -756,6 +851,7 @@ function Sidebar({
   storage: StorageSummary | null;
   theme: Theme;
   onTheme(theme: Theme): void;
+  onSettings(): void;
   onLogout(): void;
 }) {
   const nav = [
@@ -784,6 +880,7 @@ function Sidebar({
         {storage && <CompactStorage storage={storage} />}
         <div className="sidebar-tools">
           <a href="/api/export" className="sidebar-action"><Download size={16} /> 导出元数据</a>
+          <button className="sidebar-action" onClick={onSettings}><Settings2 size={16} /> 时间流设置</button>
           <div className="theme-switch" aria-label="主题">
             <button className={theme === "light" ? "active" : ""} onClick={() => onTheme("light")} aria-label="浅色">
               <Sun size={15} />
@@ -801,6 +898,53 @@ function Sidebar({
         </div>
       </aside>
     </>
+  );
+}
+
+function TimelineSettingsDialog({
+  order,
+  onChange,
+  onClose,
+}: {
+  order: TimelineOrder;
+  onChange(order: TimelineOrder): void;
+  onClose(): void;
+}) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="share-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-settings-title">
+        <header>
+          <div><p>显示偏好</p><h2 id="timeline-settings-title">时间流设置</h2></div>
+          <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={17} /></button>
+        </header>
+        <div className="share-dialog-body settings-dialog-body">
+          <fieldset>
+            <legend>新内容的位置</legend>
+            <div className="timeline-order-control">
+              <button
+                className={order === "newest-bottom" ? "active" : ""}
+                onClick={() => onChange("newest-bottom")}
+                aria-pressed={order === "newest-bottom"}
+              >
+                <ArrowDown size={18} />
+                <span><strong>最新在下</strong><small>输入框位于底部，向上滚动加载历史</small></span>
+              </button>
+              <button
+                className={order === "newest-top" ? "active" : ""}
+                onClick={() => onChange("newest-top")}
+                aria-pressed={order === "newest-top"}
+              >
+                <ArrowUp size={18} />
+                <span><strong>最新在上</strong><small>输入框位于顶部，向下查看更多</small></span>
+              </button>
+            </div>
+          </fieldset>
+          <button className="settings-done" onClick={onClose}>完成</button>
+        </div>
+      </section>
+    </div>
   );
 }
 

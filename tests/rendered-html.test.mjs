@@ -71,6 +71,24 @@ test("输入区域支持拖入多个文件并提供明确的投放状态", async
   assert.match(css, /\.composer-drop-overlay/);
 });
 
+test("时间流可设置最新内容置底，并在顶部自动加载历史", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /type TimelineOrder = "newest-top" \| "newest-bottom"/);
+  assert.match(app, /localStorage\.setItem\("drop-worker\.timeline-order", next\)/);
+  assert.match(app, /timelineNewestAtBottom \? \[\.\.\.visibleItems\]\.reverse\(\) : visibleItems/);
+  assert.match(app, /new IntersectionObserver/);
+  assert.match(app, /scrollContainer\.scrollTop = anchor\.scrollTop \+ scrollContainer\.scrollHeight - anchor\.scrollHeight/);
+  assert.match(app, /向上滚动加载历史/);
+  assert.match(css, /\.timeline-bottom-workspace/);
+  assert.match(css, /\.timeline-bottom-layout \.feed-region/);
+  assert.match(css, /\.timeline-bottom-layout > \.composer/);
+  assert.match(app, /feed\$\{timelineNewestAtBottom && !loading && visibleItems\.length === 0 \? " is-empty" : ""\}/);
+  assert.match(css, /\.feed-region\.newest-bottom \.feed\.is-empty/);
+});
+
 test("移动端只显示三项底部导航并持续展示有效分享链接", async () => {
   const [app, css] = await Promise.all([
     readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
