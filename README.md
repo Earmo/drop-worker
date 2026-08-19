@@ -1,8 +1,8 @@
 # Drop Worker
 
-Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。它提供可切换最新置顶或置底的时间流、搜索和类型筛选、收藏、临时分享、回收站、存储清理，以及 500MB 文件分片上传与断点续传。
+Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文本、链接和文件。它提供可独立设置排序方向与输入框位置的时间流、搜索和类型筛选、收藏、临时分享、回收站、存储清理，以及 500MB 文件分片上传与断点续传。
 
-部署、环境变量、存储迁移、备份和发布流水线请阅读 [部署指南](docs/deployment.md)。
+部署、环境变量和发布流水线请阅读 [部署指南](docs/deployment.md)；备份、恢复和存储迁移请阅读 [备份与恢复指南](docs/backup-restore.md)。
 
 ## 界面预览
 
@@ -32,7 +32,7 @@ Copy-Item .env.example .env
 npm run dev
 ~~~
 
-默认开发服务器使用本地模拟的 D1/R2 和固定开发身份，不对应生产数据。生产启动、SMTP、Docker、Cloudflare、备份和迁移统一以 [部署指南](docs/deployment.md) 为准。
+默认开发服务器使用本地模拟的 D1/R2 和固定开发身份，不对应生产数据。生产启动、SMTP、Docker 和 Cloudflare 以 [部署指南](docs/deployment.md) 为准，备份和迁移以 [备份与恢复指南](docs/backup-restore.md) 为准。
 
 ## 主要能力
 

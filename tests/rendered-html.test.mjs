@@ -42,6 +42,7 @@ test("成品源码包含核心工作区且不再引用预览骨架", async () =>
   assert.match(app, /时间流/);
   assert.match(app, /存储清理/);
   assert.match(app, /回收站/);
+  assert.doesNotMatch(app, /\/api\/export|导出数据清单/);
   assert.match(layout, /og\.png/);
   assert.doesNotMatch(`${page}${layout}${packageJson}`, /react-loading-skeleton|codex-preview/);
 });
@@ -71,22 +72,44 @@ test("输入区域支持拖入多个文件并提供明确的投放状态", async
   assert.match(css, /\.composer-drop-overlay/);
 });
 
-test("时间流可设置最新内容置底，并在顶部自动加载历史", async () => {
+test("时间流顺序与输入框位置可以独立设置", async () => {
   const [app, css] = await Promise.all([
     readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
   assert.match(app, /type TimelineOrder = "newest-top" \| "newest-bottom"/);
+  assert.match(app, /type ComposerPosition = "top" \| "bottom"/);
   assert.match(app, /localStorage\.setItem\("drop-worker\.timeline-order", next\)/);
+  assert.match(app, /localStorage\.setItem\("drop-worker\.composer-position", next\)/);
+  assert.match(app, /const timelineNewestAtBottom = timelineView && timelineOrder === "newest-bottom"/);
+  assert.match(app, /const timelineComposerAtBottom = timelineView && composerPosition === "bottom"/);
   assert.match(app, /timelineNewestAtBottom \? \[\.\.\.visibleItems\]\.reverse\(\) : visibleItems/);
+  assert.match(app, /!timelineComposerAtBottom && timelineComposer/);
+  assert.match(app, /timelineComposerAtBottom && timelineComposer/);
   assert.match(app, /new IntersectionObserver/);
   assert.match(app, /scrollContainer\.scrollTop = anchor\.scrollTop \+ scrollContainer\.scrollHeight - anchor\.scrollHeight/);
-  assert.match(app, /向上滚动加载历史/);
-  assert.match(css, /\.timeline-bottom-workspace/);
-  assert.match(css, /\.timeline-bottom-layout \.feed-region/);
-  assert.match(css, /\.timeline-bottom-layout > \.composer/);
+  assert.match(app, /向上加载历史/);
+  assert.match(app, /<Settings2 size=\{16\} \/> 设置/);
+  assert.doesNotMatch(app, /时间流设置/);
+  assert.match(css, /\.timeline-fixed-workspace/);
+  assert.match(css, /\.composer-bottom-layout \.timeline-feed-region/);
+  assert.match(css, /\.composer-bottom-layout > \.composer/);
   assert.match(app, /feed\$\{timelineNewestAtBottom && !loading && visibleItems\.length === 0 \? " is-empty" : ""\}/);
   assert.match(css, /\.feed-region\.newest-bottom \.feed\.is-empty/);
+});
+
+test("四种时间流与输入框组合都使用固定工作区并只滚动列表", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /const timelineView = view === "timeline"/);
+  assert.match(app, /timelineView \? " timeline-fixed-workspace" : ""/);
+  assert.match(app, /timelineView \? " timeline-fixed-layout" : ""/);
+  assert.match(app, /timelineView \? " timeline-feed-region" : ""/);
+  assert.match(css, /\.timeline-fixed-workspace/);
+  assert.match(css, /\.workspace-body\.timeline-fixed-layout/);
+  assert.match(css, /\.timeline-fixed-layout \.timeline-feed-region/);
 });
 
 test("移动端只显示三项底部导航并持续展示有效分享链接", async () => {

@@ -4,10 +4,9 @@ import {
   createTextSchema,
   listItemsQuerySchema,
   updateItemSchema,
-  type ExportBundle,
 } from "../../packages/contracts";
 import { errorResponse, parseJson, type ApiApp } from "../http";
-import { shareSummary } from "../sharing/helpers";
+import { createExportBundle } from "./export";
 import { registerItemFileRoutes } from "./files";
 
 /**
@@ -113,31 +112,7 @@ export function registerItemRoutes(api: ApiApp): void {
       c.env.services.metadata.items.listAllForExport(ownerId),
       c.env.services.metadata.shares.listShares(ownerId, now, now - 30 * 24 * 60 * 60 * 1000),
     ]);
-    const shares = storedShares.map((share) => {
-      const summary = shareSummary(share, now, c.env.services.sharing.publicUrl);
-      return {
-        id: summary.id,
-        name: summary.name,
-        customName: summary.customName,
-        members: summary.members,
-        itemCount: summary.itemCount,
-        accessMode: summary.accessMode,
-        status: summary.status,
-        createdAt: summary.createdAt,
-        expiresAt: summary.expiresAt,
-        revokedAt: summary.revokedAt,
-        accessCount: summary.accessCount,
-        downloadCount: summary.downloadCount,
-        lastAccessedAt: summary.lastAccessedAt,
-      };
-    });
-    const bundle: ExportBundle = {
-      format: "drop-worker-export",
-      version: 2,
-      exportedAt: new Date().toISOString(),
-      items,
-      shares,
-    };
+    const bundle = createExportBundle(items, storedShares, now, c.env.services.sharing.publicUrl);
     return new Response(JSON.stringify(bundle, null, 2), {
       headers: {
         "content-type": "application/json; charset=utf-8",

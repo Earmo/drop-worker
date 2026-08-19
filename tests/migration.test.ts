@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -52,9 +52,16 @@ test("可移植备份在两个部署实例之间完整往返", async () => {
   const originalFetch = globalThis.fetch;
   const originalBaseUrl = process.env.DROP_WORKER_BASE_URL;
   let active = source.services;
+  let fileDownloads = 0;
+  const requestedRanges: string[] = [];
   globalThis.fetch = async (input, init) => {
     const incoming = input instanceof Request ? input : new Request(input, init);
     const url = new URL(incoming.url);
+    if (url.pathname.startsWith("/api/files/")) {
+      fileDownloads += 1;
+      const range = incoming.headers.get("range");
+      if (range) requestedRanges.push(range);
+    }
     return handleApiRequest(new Request(`http://drop-worker.test${url.pathname}${url.search}`, incoming), active);
   };
   process.env.DROP_WORKER_BASE_URL = "http://drop-worker.test";
@@ -81,6 +88,37 @@ test("可移植备份在两个部署实例之间完整往返", async () => {
     await call(source.services, `/api/uploads/${upload.id}/complete`, { method: "POST", body: "{}" });
 
     await remoteBackup(backup);
+    assert.equal(fileDownloads, 1);
+    let reusedObjects = 0;
+    await remoteBackup(backup, (progress) => {
+      reusedObjects = Math.max(reusedObjects, progress.reusedObjects);
+    });
+    assert.equal(fileDownloads, 1);
+    assert.equal(reusedObjects, 1);
+
+    const manifestPath = join(backup, "manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      items: Array<{ type: string; backupFile?: string }>;
+    };
+    const backupFile = manifest.items.find((item) => item.type === "file")?.backupFile;
+    assert.ok(backupFile);
+    const backupFilePath = join(backup, ...backupFile.split("/"));
+    const completeBytes = await readFile(backupFilePath);
+    await writeFile(`${backupFilePath}.partial`, completeBytes.subarray(0, 5));
+    await rm(backupFilePath);
+    await writeFile(join(backup, "manifest.partial.json"), JSON.stringify(manifest, null, 2), "utf8");
+    await rm(manifestPath);
+    await remoteBackup(backup);
+    assert.deepEqual(requestedRanges, ["bytes=5-"]);
+    assert.deepEqual(await readFile(backupFilePath), completeBytes);
+    const inventory = JSON.parse(await readFile(join(backup, "inventory.json"), "utf8")) as {
+      format: string;
+      items: Array<Record<string, unknown>>;
+    };
+    assert.equal(inventory.format, "drop-worker-export");
+    assert.equal(inventory.items.length, 2);
+    assert.ok(inventory.items.every((item) => !("backupFile" in item) && !("backupSha256" in item)));
+
     active = target.services;
     await remoteRestore(backup);
 

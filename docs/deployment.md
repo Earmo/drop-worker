@@ -123,50 +123,6 @@ docker run -d --name drop-worker --restart unless-stopped --env-file .env -e DAT
 
 首次使用前，在仓库 Settings → Secrets and variables → Actions 中配置 Repository variable DOCKERHUB_USERNAME 和 Repository secret DOCKERHUB_TOKEN。推送 v0.1.0 后，镜像地址为 docker.io/<DOCKERHUB_USERNAME>/drop-worker:v0.1.0。
 
-## 备份与恢复
-
-完整备份和迁移需要一致的只读窗口：先停止应用写入（本地部署建议停止服务或容器），再执行备份；备份结束后才能恢复写入。远程迁移时同样不要在源实例继续投递、编辑或删除内容。
-
-### 本地实例
-
-~~~powershell
-pnpm admin -- backup ./backups/manual
-pnpm admin -- restore ./backups/manual
-~~~
-
-恢复命令默认拒绝覆盖已有数据库。网页中的“导出元数据”适合审阅和轻量备份；完整文件备份使用管理命令或 R2 兼容工具。
-
-可移植备份和恢复：
-
-~~~powershell
-npm run admin -- storage-backup ./backups/storage
-npm run admin -- storage-restore ./backups/storage
-~~~
-
-可移植备份包含条目、已完成文件、有效/近期分享及校验清单，不包含登录会话、验证码挑战、限流窗口和未完成上传。归档本身不加密，应写入加密磁盘或由成熟备份工具继续保护。
-
-### 自托管存储迁移
-
-迁移时通过 SOURCE_ 和 TARGET_ 前缀分别提供 DATA_DIR、数据库、对象存储与 SESSION_SECRET 配置，然后运行：
-
-~~~powershell
-npm run admin -- migrate-storage ./backups/migration-work
-~~~
-
-迁移直接丢弃未完成上传，首次只接受空目标，并校验每个已完成对象的 SHA-256。migration-report.json 会记录丢弃项、multipart 中止结果和最终状态；失败时源数据保持不动，使用同一个工作目录重试会继续同一迁移。源/目标密钥不同会拒绝恢复，可显式传入 --revoke-shares 以撤销全部分享后完成迁移。
-
-### Cloudflare 与本地实例迁移
-
-管理 CLI 可以通过已认证的 HTTP API 创建可移植备份：
-
-~~~powershell
-$env:DROP_WORKER_BASE_URL="https://drop.example.com"
-pnpm admin -- remote-backup ./backups/cloudflare
-pnpm admin -- remote-restore ./backups/cloudflare
-~~~
-
-将 DROP_WORKER_BASE_URL 和认证环境变量指向空的目标实例后恢复。本地密码部署也可以通过 DROP_WORKER_COOKIE 提供已登录会话 Cookie。恢复不保留旧条目 ID，也不提供两个运行实例之间的实时同步。
-
 ## Cloudflare Worker
 
 Cloudflare 部署使用 Workers Static Assets + Worker，并在数据库和对象存储之间选择一种组合：
@@ -368,3 +324,7 @@ Pull Request 只使用 `wrangler.example.jsonc` 执行构建、类型检查、Li
 - wrangler.jsonc、.env、数据库 URL、SMTP 凭据和备份归档不要提交到 Git。
 - 备份归档本身不加密，应写入加密磁盘或由成熟备份工具继续保护。
 - 自托管当前只承诺单个活动应用实例，不代表高可用集群。
+
+## 备份与恢复
+
+备份、恢复和存储迁移已拆分为独立的 [备份与恢复指南](backup-restore.md)。指南包含方式选择、只读窗口、变量配置、本地/S3/外部数据库示例、Docker 命令、恢复校验和常见错误。

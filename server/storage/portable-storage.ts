@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, open, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { z } from "zod";
+import { createExportBundle } from "../../api/items/export";
 import { LocalBlobStore } from "../../api/stores/local";
 import { openRelationalMetadataStore } from "../../api/stores/relational";
 import { createS3BlobStoreFromEnv, S3BlobStore } from "../../api/stores/s3";
@@ -74,6 +75,28 @@ const migrationReportSchema = z.object({
 
 type PortableManifest = z.infer<typeof portableManifestSchema>;
 type MigrationReport = z.infer<typeof migrationReportSchema>;
+
+/**
+ * 可移植备份与恢复的进度快照。
+ *
+ * 字节进度按清单中的对象大小计算；`reusedObjects` 表示备份复用了已校验的本地副本，
+ * 或恢复时目标存储已经存在相同对象，因此调用方可以区分真实传输量与扫描量。
+ */
+export type PortableStorageProgress = {
+  operation: "backup" | "restore";
+  phase: "preparing" | "verifying" | "transferring" | "finalizing";
+  completedObjects: number;
+  totalObjects: number;
+  completedBytes: number;
+  totalBytes: number;
+  reusedObjects: number;
+  currentObjectKey: string | null;
+};
+
+/** 可选的长任务进度接收器；回调必须保持轻量且不能抛出异常。 */
+export type PortableStorageOptions = {
+  onProgress?(progress: PortableStorageProgress): void;
+};
 
 type OpenStorage = {
   dataRoot: string;
@@ -150,7 +173,10 @@ function safePath(root: string, relativePath: string): string {
   return candidate;
 }
 
-async function hashFile(path: string): Promise<{ sizeBytes: number; sha256: string }> {
+async function hashFile(
+  path: string,
+  onBytes?: (completedBytes: number) => void,
+): Promise<{ sizeBytes: number; sha256: string }> {
   const file = await open(path, "r");
   const hash = createHash("sha256");
   let sizeBytes = 0;
@@ -161,6 +187,7 @@ async function hashFile(path: string): Promise<{ sizeBytes: number; sha256: stri
       if (bytesRead === 0) break;
       hash.update(buffer.subarray(0, bytesRead));
       sizeBytes += bytesRead;
+      onBytes?.(sizeBytes);
     }
   } finally {
     await file.close();
@@ -168,27 +195,179 @@ async function hashFile(path: string): Promise<{ sizeBytes: number; sha256: stri
   return { sizeBytes, sha256: hash.digest("hex") };
 }
 
-async function saveBlob(blobs: BlobStore, objectKey: string, path: string): Promise<{ sizeBytes: number; sha256: string }> {
-  const object = await blobs.get(objectKey);
-  if (!object) throw new Error(`已完成文件缺失：${objectKey}`);
-  await mkdir(dirname(path), { recursive: true });
-  const file = await open(path, "wx");
-  const hash = createHash("sha256");
-  let sizeBytes = 0;
-  const reader = object.body.getReader();
+function emitProgress(options: PortableStorageOptions, progress: PortableStorageProgress): void {
+  options.onProgress?.(progress);
+}
+
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+async function readOptionalManifest(path: string, tolerateInvalid = false): Promise<PortableManifest | null> {
   try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await file.write(value);
-      hash.update(value);
-      sizeBytes += value.byteLength;
+    return portableManifestSchema.parse(JSON.parse(await readFile(path, "utf8")));
+  } catch (error) {
+    if (isMissingFile(error) || tolerateInvalid) return null;
+    throw error;
+  }
+}
+
+async function writePartialManifest(destination: string, manifest: PortableManifest): Promise<void> {
+  // 部分清单也使用两阶段替换，确保进程在写清单时退出仍至少保留一个可解析版本。
+  const currentPath = resolve(destination, "manifest.partial.json");
+  const nextPath = resolve(destination, "manifest.partial.next.json");
+  const previousPath = resolve(destination, "manifest.partial.previous.json");
+  await writeFile(nextPath, JSON.stringify(manifest, null, 2), "utf8");
+  await rm(previousPath, { force: true });
+  let movedCurrent = false;
+  try {
+    await rename(currentPath, previousPath);
+    movedCurrent = true;
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
+  try {
+    await rename(nextPath, currentPath);
+  } catch (error) {
+    if (movedCurrent) await rename(previousPath, currentPath).catch(() => undefined);
+    throw error;
+  }
+  await rm(previousPath, { force: true });
+}
+
+async function commitManifest(destination: string, manifest: PortableManifest): Promise<void> {
+  const currentPath = resolve(destination, "manifest.json");
+  const nextPath = resolve(destination, "manifest.next.json");
+  const previousPath = resolve(destination, "manifest.previous.json");
+  await writeFile(nextPath, JSON.stringify(manifest, null, 2), "utf8");
+  await rm(previousPath, { force: true });
+  let movedCurrent = false;
+  try {
+    await rename(currentPath, previousPath);
+    movedCurrent = true;
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
+  try {
+    await rename(nextPath, currentPath);
+  } catch (error) {
+    if (movedCurrent) await rename(previousPath, currentPath).catch(() => undefined);
+    throw error;
+  }
+  await rm(previousPath, { force: true });
+  await Promise.all([
+    "manifest.partial.json",
+    "manifest.partial.next.json",
+    "manifest.partial.previous.json",
+  ].map((name) => rm(resolve(destination, name), { force: true })));
+}
+
+async function commitInventory(destination: string, inventory: ReturnType<typeof createExportBundle>): Promise<void> {
+  const currentPath = resolve(destination, "inventory.json");
+  const nextPath = resolve(destination, "inventory.next.json");
+  const previousPath = resolve(destination, "inventory.previous.json");
+  await writeFile(nextPath, JSON.stringify(inventory, null, 2), "utf8");
+  await rm(previousPath, { force: true });
+  let movedCurrent = false;
+  try {
+    await rename(currentPath, previousPath);
+    movedCurrent = true;
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
+  try {
+    await rename(nextPath, currentPath);
+  } catch (error) {
+    if (movedCurrent) await rename(previousPath, currentPath).catch(() => undefined);
+    throw error;
+  }
+  await rm(previousPath, { force: true });
+}
+
+async function reusableObject(
+  destination: string,
+  candidate: PortableManifest["objects"][number] | undefined,
+  expectedSize: number,
+  onBytes?: (completedBytes: number) => void,
+): Promise<PortableManifest["objects"][number] | null> {
+  if (!candidate || candidate.sizeBytes !== expectedSize) return null;
+  try {
+    const result = await hashFile(safePath(destination, candidate.path), onBytes);
+    return result.sizeBytes === candidate.sizeBytes && result.sha256 === candidate.sha256
+      ? candidate
+      : null;
+  } catch (error) {
+    if (isMissingFile(error)) return null;
+    throw error;
+  }
+}
+
+async function saveBlob(
+  blobs: BlobStore,
+  objectKey: string,
+  path: string,
+  onBytes?: (completedBytes: number) => void,
+): Promise<{ sizeBytes: number; sha256: string }> {
+  const totalSize = await blobs.size(objectKey);
+  if (totalSize === null) throw new Error(`已完成文件缺失：${objectKey}`);
+  await mkdir(dirname(path), { recursive: true });
+  const temporary = `${path}.partial`;
+  let resumedSize = 0;
+  try {
+    resumedSize = (await stat(temporary)).size;
+    if (resumedSize > totalSize) {
+      await rm(temporary, { force: true });
+      resumedSize = 0;
+    }
+  } catch (error) {
+    if (!isMissingFile(error)) throw error;
+  }
+  const hash = createHash("sha256");
+  if (resumedSize > 0) {
+    const partial = await open(temporary, "r");
+    let hashedBytes = 0;
+    try {
+      const buffer = Buffer.allocUnsafe(8 * 1024 * 1024);
+      for (;;) {
+        const { bytesRead } = await partial.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        hash.update(buffer.subarray(0, bytesRead));
+        hashedBytes += bytesRead;
+        onBytes?.(hashedBytes);
+      }
+    } finally {
+      await partial.close();
+    }
+  }
+  onBytes?.(resumedSize);
+  const object = resumedSize < totalSize
+    ? await blobs.get(objectKey, { offset: resumedSize, length: totalSize - resumedSize })
+    : null;
+  if (resumedSize < totalSize && !object) throw new Error(`无法续传对象：${objectKey}`);
+  const file = await open(temporary, resumedSize > 0 ? "a" : "w");
+  let sizeBytes = resumedSize;
+  const reader = object?.body.getReader();
+  try {
+    if (reader) {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await file.write(value);
+        hash.update(value);
+        sizeBytes += value.byteLength;
+        onBytes?.(sizeBytes);
+      }
     }
   } finally {
-    reader.releaseLock();
+    reader?.releaseLock();
     await file.close();
   }
-  if (sizeBytes !== object.totalSize) throw new Error(`对象长度不一致：${objectKey}`);
+  if (sizeBytes !== totalSize) {
+    throw new Error(`对象长度不一致：${objectKey}`);
+  }
+  // 新副本完整落盘并算出摘要后才替换旧副本，续跑时不会误用半个文件。
+  await rm(path, { force: true });
+  await rename(temporary, path);
   return { sizeBytes, sha256: hash.digest("hex") };
 }
 
@@ -237,31 +416,58 @@ async function hashBlob(blobs: BlobStore, objectKey: string): Promise<{ sizeByte
 export async function createPortableBackup(
   destinationArgument: string | undefined,
   prefix?: "SOURCE",
+  options: PortableStorageOptions = {},
 ): Promise<{ destination: string; manifest: PortableManifest }> {
   const destination = resolve(destinationArgument || `./backups/storage-${Date.now()}`);
-  await mkdir(destination, { recursive: false });
+  await mkdir(destination, { recursive: true });
+  const previousManifest = await readOptionalManifest(resolve(destination, "manifest.json"));
+  const partialManifest = await readOptionalManifest(resolve(destination, "manifest.partial.json"), true)
+    || await readOptionalManifest(resolve(destination, "manifest.partial.next.json"), true)
+    || await readOptionalManifest(resolve(destination, "manifest.partial.previous.json"), true);
+  if (!previousManifest && !partialManifest && (await readdir(destination)).length > 0) {
+    throw new Error("备份目录非空且不包含有效清单，已拒绝写入");
+  }
   const storage = await openStorage(prefix);
   try {
     const [items, shares] = await Promise.all([
       storage.metadata.listPortableItems(),
       storage.metadata.listPortableShares(),
     ]);
-    const objects: PortableManifest["objects"] = [];
-    const seen = new Set<string>();
-    for (const item of items) {
-      if (item.type !== "file" || !item.objectKey || seen.has(item.objectKey)) continue;
-      seen.add(item.objectKey);
-      const relativePath = `objects/${item.objectKey}`;
-      const result = await saveBlob(storage.blobs, item.objectKey, safePath(destination, relativePath));
-      objects.push({ objectKey: item.objectKey, path: relativePath, ...result });
+    const currentSecretFingerprint = secretFingerprint(secretValue(prefix));
+    if (partialManifest && partialManifest.secretFingerprint !== currentSecretFingerprint) {
+      throw new Error("未完成备份来自不同的 SESSION_SECRET，不能在同一目录续跑");
     }
-    const manifest: PortableManifest = {
+    if (previousManifest && previousManifest.secretFingerprint !== currentSecretFingerprint) {
+      throw new Error("现有备份来自不同的 SESSION_SECRET，不能在同一目录增量更新");
+    }
+    const fileItems = items.filter(
+      (item): item is StoredItem & { objectKey: string } => item.type === "file" && Boolean(item.objectKey),
+    );
+    const uniqueFileItems = [...new Map(fileItems.map((item) => [item.objectKey, item])).values()];
+    const totalBytes = uniqueFileItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+    const baseProgress: PortableStorageProgress = {
+      operation: "backup",
+      phase: "preparing",
+      completedObjects: 0,
+      totalObjects: uniqueFileItems.length,
+      completedBytes: 0,
+      totalBytes,
+      reusedObjects: 0,
+      currentObjectKey: null,
+    };
+    emitProgress(options, baseProgress);
+    const objects: PortableManifest["objects"] = [];
+    const partialByKey = new Map(partialManifest?.objects.map((object) => [object.objectKey, object]));
+    const previousByKey = new Map(previousManifest?.objects.map((object) => [object.objectKey, object]));
+    let completedBytes = 0;
+    let reusedObjects = 0;
+    const manifestBase: Omit<PortableManifest, "objects"> = {
       format: "drop-worker-portable-storage",
       version: 3,
-      migrationId: crypto.randomUUID(),
-      createdAt: new Date().toISOString(),
+      migrationId: partialManifest?.migrationId || crypto.randomUUID(),
+      createdAt: partialManifest?.createdAt || new Date().toISOString(),
       schemaVersion: 5,
-      secretFingerprint: secretFingerprint(secretValue(prefix)),
+      secretFingerprint: currentSecretFingerprint,
       items,
       shares: shares.map((share) => ({
         id: share.id,
@@ -286,12 +492,90 @@ export async function createPortableBackup(
         downloadCount: share.downloadCount,
         lastAccessedAt: share.lastAccessedAt,
       })),
-      objects,
     };
-    await writeFile(resolve(destination, "manifest.json"), JSON.stringify(manifest, null, 2), {
-      encoding: "utf8",
-      flag: "wx",
+    // 在传输第一个对象前落下快照身份；即使首个大文件中途失败，也能安全识别续跑目录。
+    await writePartialManifest(destination, { ...manifestBase, objects });
+    for (const item of uniqueFileItems) {
+      emitProgress(options, {
+        ...baseProgress,
+        phase: "verifying",
+        completedObjects: objects.length,
+        completedBytes,
+        reusedObjects,
+        currentObjectKey: item.objectKey,
+      });
+      const relativePath = `objects/${item.objectKey}`;
+      const resumed = await reusableObject(
+        destination,
+        partialByKey.get(item.objectKey) || previousByKey.get(item.objectKey),
+        item.sizeBytes,
+        (objectBytes) => emitProgress(options, {
+          ...baseProgress,
+          phase: "verifying",
+          completedObjects: objects.length,
+          completedBytes: completedBytes + objectBytes,
+          reusedObjects,
+          currentObjectKey: item.objectKey,
+        }),
+      );
+      let object: PortableManifest["objects"][number];
+      if (resumed) {
+        object = resumed;
+        reusedObjects += 1;
+        await rm(`${safePath(destination, resumed.path)}.partial`, { force: true });
+      } else {
+        emitProgress(options, {
+          ...baseProgress,
+          phase: "transferring",
+          completedObjects: objects.length,
+          completedBytes,
+          reusedObjects,
+          currentObjectKey: item.objectKey,
+        });
+        const result = await saveBlob(
+          storage.blobs,
+          item.objectKey,
+          safePath(destination, relativePath),
+          (objectBytes) => emitProgress(options, {
+            ...baseProgress,
+            phase: "transferring",
+            completedObjects: objects.length,
+            completedBytes: completedBytes + objectBytes,
+            reusedObjects,
+            currentObjectKey: item.objectKey,
+          }),
+        );
+        if (result.sizeBytes !== item.sizeBytes) throw new Error(`条目与对象长度不一致：${item.objectKey}`);
+        object = { objectKey: item.objectKey, path: relativePath, ...result };
+      }
+      objects.push(object);
+      completedBytes += object.sizeBytes;
+      // 每个完整对象都立即进入部分清单；任务被终止后，同一目录可以从下一个对象继续。
+      await writePartialManifest(destination, { ...manifestBase, objects });
+      emitProgress(options, {
+        ...baseProgress,
+        phase: "transferring",
+        completedObjects: objects.length,
+        completedBytes,
+        reusedObjects,
+        currentObjectKey: item.objectKey,
+      });
+    }
+    const manifest: PortableManifest = { ...manifestBase, objects };
+    emitProgress(options, {
+      ...baseProgress,
+      phase: "finalizing",
+      completedObjects: objects.length,
+      completedBytes,
+      reusedObjects,
+      currentObjectKey: null,
     });
+    await commitManifest(destination, manifest);
+    // inventory 是仅供审阅的公开字段视图；恢复始终以包含内部字段的 manifest 为准。
+    await commitInventory(destination, createExportBundle(items, shares, Date.now()));
+    const currentPaths = new Set(objects.map((object) => object.path));
+    const staleObjects = previousManifest?.objects.filter((object) => !currentPaths.has(object.path)) || [];
+    for (const stale of staleObjects) await rm(safePath(destination, stale.path), { force: true });
     return { destination, manifest };
   } finally {
     await storage.close();
@@ -324,14 +608,52 @@ export async function restorePortableBackup(
   sourceArgument: string,
   prefix?: "TARGET",
   revokeShares = false,
+  options: PortableStorageOptions = {},
 ): Promise<void> {
   const source = resolve(sourceArgument);
   const manifest = await readManifest(source);
-  for (const object of manifest.objects) {
-    const result = await hashFile(safePath(source, object.path));
+  const totalBytes = manifest.objects.reduce((sum, object) => sum + object.sizeBytes, 0);
+  const baseProgress: PortableStorageProgress = {
+    operation: "restore",
+    phase: "preparing",
+    completedObjects: 0,
+    totalObjects: manifest.objects.length,
+    completedBytes: 0,
+    totalBytes,
+    reusedObjects: 0,
+    currentObjectKey: null,
+  };
+  emitProgress(options, baseProgress);
+  let verifiedBytes = 0;
+  for (const [index, object] of manifest.objects.entries()) {
+    emitProgress(options, {
+      ...baseProgress,
+      phase: "verifying",
+      completedObjects: index,
+      completedBytes: verifiedBytes,
+      currentObjectKey: object.objectKey,
+    });
+    const result = await hashFile(
+      safePath(source, object.path),
+      (objectBytes) => emitProgress(options, {
+        ...baseProgress,
+        phase: "verifying",
+        completedObjects: index,
+        completedBytes: verifiedBytes + objectBytes,
+        currentObjectKey: object.objectKey,
+      }),
+    );
     if (result.sizeBytes !== object.sizeBytes || result.sha256 !== object.sha256) {
       throw new Error(`备份对象完整性校验失败：${object.objectKey}`);
     }
+    verifiedBytes += object.sizeBytes;
+    emitProgress(options, {
+      ...baseProgress,
+      phase: "verifying",
+      completedObjects: index + 1,
+      completedBytes: verifiedBytes,
+      currentObjectKey: object.objectKey,
+    });
   }
   const targetSecret = secretValue(prefix);
   if (manifest.secretFingerprint !== secretFingerprint(targetSecret) && !revokeShares) {
@@ -346,16 +668,38 @@ export async function restorePortableBackup(
     );
     if (state === "rejected") throw new Error("目标包含其他数据或不同迁移状态，恢复已拒绝");
     for (const item of manifest.items) await storage.metadata.importPortableItem(item as StoredItem);
-    for (const object of manifest.objects) {
+    let completedBytes = 0;
+    let reusedObjects = 0;
+    for (const [index, object] of manifest.objects.entries()) {
+      emitProgress(options, {
+        ...baseProgress,
+        phase: "transferring",
+        completedObjects: index,
+        completedBytes,
+        reusedObjects,
+        currentObjectKey: object.objectKey,
+      });
       const existing = await hashBlob(storage.blobs, object.objectKey);
-      if (existing?.sizeBytes === object.sizeBytes && existing.sha256 === object.sha256) continue;
-      if (existing) await storage.blobs.delete(object.objectKey);
-      const item = manifest.items.find((candidate) => candidate.objectKey === object.objectKey);
-      await uploadFile(storage.blobs, object.objectKey, safePath(source, object.path), item?.mimeType || null);
-      const restored = await hashBlob(storage.blobs, object.objectKey);
-      if (restored?.sizeBytes !== object.sizeBytes || restored.sha256 !== object.sha256) {
-        throw new Error(`目标对象完整性校验失败：${object.objectKey}`);
+      if (existing?.sizeBytes === object.sizeBytes && existing.sha256 === object.sha256) {
+        reusedObjects += 1;
+      } else {
+        if (existing) await storage.blobs.delete(object.objectKey);
+        const item = manifest.items.find((candidate) => candidate.objectKey === object.objectKey);
+        await uploadFile(storage.blobs, object.objectKey, safePath(source, object.path), item?.mimeType || null);
+        const restored = await hashBlob(storage.blobs, object.objectKey);
+        if (restored?.sizeBytes !== object.sizeBytes || restored.sha256 !== object.sha256) {
+          throw new Error(`目标对象完整性校验失败：${object.objectKey}`);
+        }
       }
+      completedBytes += object.sizeBytes;
+      emitProgress(options, {
+        ...baseProgress,
+        phase: "transferring",
+        completedObjects: index + 1,
+        completedBytes,
+        reusedObjects,
+        currentObjectKey: object.objectKey,
+      });
     }
     const now = Date.now();
     for (const share of manifest.shares) {
@@ -392,6 +736,14 @@ export async function restorePortableBackup(
     if (restoredItems.length !== manifest.items.length || restoredShares.length !== manifest.shares.length) {
       throw new Error("目标元数据计数与备份清单不一致");
     }
+    emitProgress(options, {
+      ...baseProgress,
+      phase: "finalizing",
+      completedObjects: manifest.objects.length,
+      completedBytes: totalBytes,
+      reusedObjects,
+      currentObjectKey: null,
+    });
     await storage.metadata.finishPortableImport(manifest.migrationId, now);
   } finally {
     await storage.close();

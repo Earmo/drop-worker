@@ -64,6 +64,7 @@ import {
 type View = "timeline" | "favorites" | "shares" | "cleanup" | "trash";
 type Theme = "system" | "light" | "dark";
 type TimelineOrder = "newest-top" | "newest-bottom";
+type ComposerPosition = "top" | "bottom";
 function TypeIcon({ type }: { type: ItemType }) {
   if (type === "text") return <FileText size={17} />;
   if (type === "link") return <Link2 size={17} />;
@@ -94,6 +95,7 @@ export function DropApp() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>("system");
   const [timelineOrder, setTimelineOrder] = useState<TimelineOrder>("newest-bottom");
+  const [composerPosition, setComposerPosition] = useState<ComposerPosition>("bottom");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [clock, setClock] = useState(0);
   const [cleanupAge, setCleanupAge] = useState("all");
@@ -107,16 +109,25 @@ export function DropApp() {
   const historyLoaderRef = useRef<HTMLDivElement>(null);
   const loadingMoreRequest = useRef(false);
   const historyScrollAnchor = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
-  const timelineNewestAtBottom = view === "timeline" && timelineOrder === "newest-bottom";
+  const timelineView = view === "timeline";
+  const timelineNewestAtBottom = timelineView && timelineOrder === "newest-bottom";
+  const timelineComposerAtBottom = timelineView && composerPosition === "bottom";
 
   useEffect(() => {
     // 首屏只做一次浏览器侧初始化：主题、断点续传队列、分享参数和 Service Worker。
     const storedTheme = (localStorage.getItem("drop-worker.theme") as Theme | null) || "system";
     const storedTimelineOrder = localStorage.getItem("drop-worker.timeline-order");
+    const storedComposerPosition = localStorage.getItem("drop-worker.composer-position");
     document.documentElement.dataset.theme = storedTheme;
     queueMicrotask(() => {
       setTheme(storedTheme);
       setTimelineOrder(storedTimelineOrder === "newest-top" ? "newest-top" : "newest-bottom");
+      // 新设置缺失时沿用旧版的联动关系，升级后不会突然改变用户已经习惯的输入框位置。
+      setComposerPosition(
+        storedComposerPosition === "top" || storedComposerPosition === "bottom"
+          ? storedComposerPosition
+          : storedTimelineOrder === "newest-top" ? "top" : "bottom",
+      );
       setUploads(readSavedUploads().map((task) => ({ ...task, status: "paused" })));
       const parameters = new URLSearchParams(window.location.search);
       if (parameters.get("share") === "1") {
@@ -278,6 +289,11 @@ export function DropApp() {
     setTimelineOrder(next);
     setSelected(new Set());
     localStorage.setItem("drop-worker.timeline-order", next);
+  };
+
+  const changeComposerPosition = (next: ComposerPosition) => {
+    setComposerPosition(next);
+    localStorage.setItem("drop-worker.composer-position", next);
   };
 
   const changeView = (next: View) => {
@@ -521,7 +537,7 @@ export function DropApp() {
     if (!timelineNewestAtBottom || loading || historyScrollAnchor.current) return;
     const scrollContainer = feedScrollRef.current;
     if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
-  }, [loading, newestTimelineItemId, query, timelineNewestAtBottom, type]);
+  }, [loading, newestTimelineItemId, query, timelineComposerAtBottom, timelineNewestAtBottom, type]);
 
   const duplicateIds = useMemo(() => {
     // 疑似重复只用于提示，不自动删除：文件名和大小相同不代表内容一定相同。
@@ -597,7 +613,7 @@ export function DropApp() {
         }}
       />
 
-      <main className={`workspace${timelineNewestAtBottom ? " timeline-bottom-workspace" : ""}`}>
+      <main className={`workspace${timelineView ? " timeline-fixed-workspace" : ""}`}>
         <header className="workspace-header">
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航">
             <Menu size={19} />
@@ -628,9 +644,9 @@ export function DropApp() {
           </div>
         )}
 
-        <section className={`workspace-body${timelineNewestAtBottom ? " timeline-bottom-layout" : ""}`}>
-          {!timelineNewestAtBottom && timelineComposer}
-          {!timelineNewestAtBottom && uploadQueue}
+        <section className={`workspace-body${timelineView ? " timeline-fixed-layout" : ""}${timelineComposerAtBottom ? " composer-bottom-layout" : ""}`}>
+          {!timelineComposerAtBottom && timelineComposer}
+          {!timelineComposerAtBottom && uploadQueue}
 
           {view === "cleanup" && storage && (
             <>
@@ -673,8 +689,8 @@ export function DropApp() {
           )}
 
           {view !== "shares" && <section
-            className={`feed-region${timelineNewestAtBottom ? " newest-bottom" : ""}`}
-            ref={timelineNewestAtBottom ? feedScrollRef : undefined}
+            className={`feed-region${timelineView ? " timeline-feed-region" : ""}${timelineNewestAtBottom ? " newest-bottom" : ""}`}
+            ref={timelineView ? feedScrollRef : undefined}
           ><div className="feed-toolbar">
             <div className="segmented" aria-label="类型筛选">
               {(["all", "text", "link", "file"] as const).map((value) => (
@@ -793,8 +809,8 @@ export function DropApp() {
               </button>
             </div>
           )}</section>}
-          {timelineNewestAtBottom && uploadQueue}
-          {timelineNewestAtBottom && timelineComposer}
+          {timelineComposerAtBottom && uploadQueue}
+          {timelineComposerAtBottom && timelineComposer}
         </section>
       </main>
 
@@ -820,9 +836,11 @@ export function DropApp() {
         />
       )}
       {settingsOpen && (
-        <TimelineSettingsDialog
-          order={timelineOrder}
-          onChange={changeTimelineOrder}
+        <SettingsDialog
+          timelineOrder={timelineOrder}
+          composerPosition={composerPosition}
+          onTimelineOrder={changeTimelineOrder}
+          onComposerPosition={changeComposerPosition}
           onClose={() => setSettingsOpen(false)}
         />
       )}
@@ -879,8 +897,7 @@ function Sidebar({
         <div className="sidebar-spacer" />
         {storage && <CompactStorage storage={storage} />}
         <div className="sidebar-tools">
-          <a href="/api/export" className="sidebar-action"><Download size={16} /> 导出元数据</a>
-          <button className="sidebar-action" onClick={onSettings}><Settings2 size={16} /> 时间流设置</button>
+          <button className="sidebar-action" onClick={onSettings}><Settings2 size={16} /> 设置</button>
           <div className="theme-switch" aria-label="主题">
             <button className={theme === "light" ? "active" : ""} onClick={() => onTheme("light")} aria-label="浅色">
               <Sun size={15} />
@@ -901,43 +918,68 @@ function Sidebar({
   );
 }
 
-function TimelineSettingsDialog({
-  order,
-  onChange,
+function SettingsDialog({
+  timelineOrder,
+  composerPosition,
+  onTimelineOrder,
+  onComposerPosition,
   onClose,
 }: {
-  order: TimelineOrder;
-  onChange(order: TimelineOrder): void;
+  timelineOrder: TimelineOrder;
+  composerPosition: ComposerPosition;
+  onTimelineOrder(order: TimelineOrder): void;
+  onComposerPosition(position: ComposerPosition): void;
   onClose(): void;
 }) {
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <section className="share-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="timeline-settings-title">
+      <section className="share-dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <header>
-          <div><p>显示偏好</p><h2 id="timeline-settings-title">时间流设置</h2></div>
+          <div><p>显示偏好</p><h2 id="settings-title">设置</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="关闭"><X size={17} /></button>
         </header>
         <div className="share-dialog-body settings-dialog-body">
           <fieldset>
-            <legend>新内容的位置</legend>
-            <div className="timeline-order-control">
+            <legend>时间流顺序</legend>
+            <div className="settings-option-control">
               <button
-                className={order === "newest-bottom" ? "active" : ""}
-                onClick={() => onChange("newest-bottom")}
-                aria-pressed={order === "newest-bottom"}
-              >
-                <ArrowDown size={18} />
-                <span><strong>最新在下</strong><small>输入框位于底部，向上滚动加载历史</small></span>
-              </button>
-              <button
-                className={order === "newest-top" ? "active" : ""}
-                onClick={() => onChange("newest-top")}
-                aria-pressed={order === "newest-top"}
+                className={timelineOrder === "newest-top" ? "active" : ""}
+                onClick={() => onTimelineOrder("newest-top")}
+                aria-pressed={timelineOrder === "newest-top"}
               >
                 <ArrowUp size={18} />
-                <span><strong>最新在上</strong><small>输入框位于顶部，向下查看更多</small></span>
+                <span><strong>最新在上</strong><small>新内容显示在顶部，向下查看更多</small></span>
+              </button>
+              <button
+                className={timelineOrder === "newest-bottom" ? "active" : ""}
+                onClick={() => onTimelineOrder("newest-bottom")}
+                aria-pressed={timelineOrder === "newest-bottom"}
+              >
+                <ArrowDown size={18} />
+                <span><strong>最新在下</strong><small>新内容显示在底部，向上加载历史</small></span>
+              </button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>输入框位置</legend>
+            <div className="settings-option-control">
+              <button
+                className={composerPosition === "top" ? "active" : ""}
+                onClick={() => onComposerPosition("top")}
+                aria-pressed={composerPosition === "top"}
+              >
+                <ArrowUp size={18} />
+                <span><strong>顶部</strong><small>输入框固定在时间流顶部</small></span>
+              </button>
+              <button
+                className={composerPosition === "bottom" ? "active" : ""}
+                onClick={() => onComposerPosition("bottom")}
+                aria-pressed={composerPosition === "bottom"}
+              >
+                <ArrowDown size={18} />
+                <span><strong>底部</strong><small>输入框固定在时间流底部</small></span>
               </button>
             </div>
           </fieldset>

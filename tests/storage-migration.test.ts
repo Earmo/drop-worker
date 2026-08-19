@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -69,7 +69,48 @@ test("可移植存储备份保留条目与分享但丢弃登录会话", async ()
     process.env.TARGET_DATABASE_DRIVER = "sqlite";
     process.env.TARGET_BLOB_DRIVER = "local";
     process.env.TARGET_SESSION_SECRET = "portable-secret-that-is-long-enough";
-    await createPortableBackup(backupRoot, "SOURCE");
+    const firstBackup = await createPortableBackup(backupRoot, "SOURCE");
+    const inventoryText = await readFile(join(backupRoot, "inventory.json"), "utf8");
+    const inventory = JSON.parse(inventoryText) as {
+      format: string;
+      items: Array<Record<string, unknown>>;
+      shares: Array<Record<string, unknown>>;
+    };
+    assert.equal(inventory.format, "drop-worker-export");
+    assert.equal(inventory.items.length, 1);
+    assert.equal(inventory.shares.length, 1);
+    assert.equal("ownerId" in inventory.items[0]!, false);
+    assert.equal("objectKey" in inventory.items[0]!, false);
+    assert.equal("tokenHash" in inventory.shares[0]!, false);
+    assert.equal("codeHash" in inventory.shares[0]!, false);
+    assert.doesNotMatch(inventoryText, /v1\.portable\.encrypted/);
+    let reusedObjects = 0;
+    await createPortableBackup(backupRoot, "SOURCE", {
+      onProgress: (progress) => {
+        reusedObjects = Math.max(reusedObjects, progress.reusedObjects);
+      },
+    });
+    assert.equal(reusedObjects, 1);
+
+    const object = firstBackup.manifest.objects[0]!;
+    const backupObjectPath = join(backupRoot, ...object.path.split("/"));
+    const completeBytes = await readFile(backupObjectPath);
+    await writeFile(`${backupObjectPath}.partial`, completeBytes.subarray(0, 5));
+    await rm(backupObjectPath);
+    await writeFile(
+      join(backupRoot, "manifest.partial.json"),
+      JSON.stringify(firstBackup.manifest, null, 2),
+      "utf8",
+    );
+    await rm(join(backupRoot, "manifest.json"));
+    const resumedBytes: number[] = [];
+    await createPortableBackup(backupRoot, "SOURCE", {
+      onProgress: (progress) => {
+        if (progress.phase === "transferring") resumedBytes.push(progress.completedBytes);
+      },
+    });
+    assert.ok(resumedBytes.some((value) => value === 5));
+    assert.deepEqual(await readFile(backupObjectPath), completeBytes);
     await restorePortableBackup(backupRoot, "TARGET");
 
     const targetMetadata = openLocalMetadataStore(join(targetRoot, "drop-worker.sqlite"));
@@ -83,8 +124,8 @@ test("可移植存储备份保留条目与分享但丢弃登录会话", async ()
       assert.equal(shares[0]?.codeHash, "b".repeat(43));
       assert.equal(shares[0]?.codeEncrypted, "v1.portable.encrypted");
       assert.equal(await targetMetadata.store.getAuthSession("session-token-hash", Date.now()), null);
-      const object = await targetBlobs.get(objectKey);
-      assert.equal(await new Response(object?.body).text(), "portable-object");
+      const restoredObject = await targetBlobs.get(objectKey);
+      assert.equal(await new Response(restoredObject?.body).text(), "portable-object");
     } finally {
       targetMetadata.close();
     }

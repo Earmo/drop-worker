@@ -294,7 +294,7 @@ textarea:focus-visible,
   margin-left: 244px;
 }
 
-.timeline-bottom-workspace {
+.timeline-fixed-workspace {
   display: flex;
   height: 100svh;
   min-height: 0;
@@ -302,8 +302,8 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
-.timeline-bottom-workspace .workspace-header,
-.timeline-bottom-workspace .security-warning {
+.timeline-fixed-workspace .workspace-header,
+.timeline-fixed-workspace .security-warning {
   flex: 0 0 auto;
 }
 
@@ -387,7 +387,7 @@ textarea:focus-visible,
   padding: 34px 0 90px;
 }
 
-.workspace-body.timeline-bottom-layout {
+.workspace-body.timeline-fixed-layout {
   display: flex;
   min-height: 0;
   flex: 1;
@@ -395,8 +395,7 @@ textarea:focus-visible,
   padding: 18px 0;
 }
 
-.timeline-bottom-layout .feed-region {
-  order: 1;
+.timeline-fixed-layout .timeline-feed-region {
   display: flex;
   min-height: 0;
   flex: 1;
@@ -408,25 +407,41 @@ textarea:focus-visible,
   scrollbar-gutter: stable;
 }
 
-.timeline-bottom-layout > .upload-queue {
+.composer-bottom-layout .timeline-feed-region {
+  order: 1;
+}
+
+.timeline-fixed-layout > .composer {
+  flex: 0 0 auto;
+}
+
+.timeline-fixed-layout:not(.composer-bottom-layout) > .composer {
+  margin-bottom: 12px;
+}
+
+.timeline-fixed-layout:not(.composer-bottom-layout) > .upload-queue {
+  max-height: 148px;
+  overflow-y: auto;
+}
+
+.composer-bottom-layout > .upload-queue {
   order: 2;
   max-height: 148px;
   margin: 10px 0 0;
   overflow-y: auto;
 }
 
-.timeline-bottom-layout > .composer {
+.composer-bottom-layout > .composer {
   order: 3;
-  flex: 0 0 auto;
   margin: 12px 0 0;
 }
 
-.timeline-bottom-layout .composer textarea {
+.timeline-fixed-layout .composer textarea {
   min-height: 76px;
   max-height: 24svh;
 }
 
-.timeline-bottom-layout .feed-toolbar {
+.timeline-fixed-layout .feed-toolbar {
   position: sticky;
   top: 0;
   z-index: 7;
@@ -436,26 +451,26 @@ textarea:focus-visible,
   background: var(--bg);
 }
 
-.timeline-bottom-layout .bulk-bar {
+.timeline-fixed-layout .bulk-bar {
   top: 53px;
 }
 
-.timeline-bottom-layout .history-loader {
+.timeline-fixed-layout .history-loader {
   flex: 0 0 auto;
   padding: 4px 0 10px;
 }
 
-.timeline-bottom-layout .feed-region.newest-bottom .feed {
+.timeline-fixed-layout .feed-region.newest-bottom .feed {
   margin-top: auto;
 }
 
-.timeline-bottom-layout .feed-region.newest-bottom .feed.is-empty {
+.timeline-fixed-layout .feed-region.newest-bottom .feed.is-empty {
   min-height: 0;
   flex: 1;
   margin-top: 0;
 }
 
-.timeline-bottom-layout .feed.is-empty .empty-state {
+.timeline-fixed-layout .feed.is-empty .empty-state {
   min-height: 100%;
 }
 
@@ -1714,7 +1729,7 @@ textarea:focus-visible,
   gap: 18px;
 }
 
-.timeline-order-control {
+.settings-option-control {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px;
@@ -1724,7 +1739,7 @@ textarea:focus-visible,
   background: var(--surface-muted);
 }
 
-.timeline-order-control button {
+.settings-option-control button {
   display: flex;
   min-width: 0;
   min-height: 76px;
@@ -1739,28 +1754,28 @@ textarea:focus-visible,
   cursor: pointer;
 }
 
-.timeline-order-control button.active {
+.settings-option-control button.active {
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
 }
 
-.timeline-order-control button > svg {
+.settings-option-control button > svg {
   flex: 0 0 auto;
   margin-top: 2px;
 }
 
-.timeline-order-control button span {
+.settings-option-control button span {
   display: grid;
   min-width: 0;
   gap: 4px;
 }
 
-.timeline-order-control button strong {
+.settings-option-control button strong {
   font-size: 12px;
 }
 
-.timeline-order-control button small {
+.settings-option-control button small {
   color: var(--text-muted);
   font-size: 10px;
   line-height: 1.45;
@@ -2541,28 +2556,32 @@ textarea:focus-visible,
     padding: 18px 0 104px;
   }
 
-  .workspace-body.timeline-bottom-layout {
+  .workspace-body.timeline-fixed-layout {
     padding: 10px 0 calc(78px + env(safe-area-inset-bottom));
   }
 
-  .timeline-bottom-layout > .composer {
+  .composer-bottom-layout > .composer {
     margin-top: 8px;
   }
 
-  .timeline-bottom-layout .composer textarea {
+  .timeline-fixed-layout:not(.composer-bottom-layout) > .composer {
+    margin-bottom: 8px;
+  }
+
+  .timeline-fixed-layout .composer textarea {
     min-height: 64px;
     max-height: 20svh;
   }
 
-  .timeline-bottom-layout .composer-footer {
+  .timeline-fixed-layout .composer-footer {
     min-height: 50px;
   }
 
-  .timeline-bottom-layout .bulk-bar {
+  .timeline-fixed-layout .bulk-bar {
     top: 84px;
   }
 
-  .timeline-order-control {
+  .settings-option-control {
     grid-template-columns: 1fr;
   }
 
