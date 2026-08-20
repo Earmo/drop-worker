@@ -2243,13 +2243,21 @@ textarea:focus-visible,
 
 .shared-collection-members {
   display: grid;
+  gap: 16px;
 }
 
+/* 成员卡片与正文内部分割线分层：外框分组，内部只用更浅的规则线。 */
 .shared-collection-members > article {
   width: 100%;
   max-width: none;
-  padding: 28px 0 34px;
-  border-top: 1px solid var(--line-strong);
+  padding: 22px 24px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+}
+
+.shared-collection-members .shared-content-heading {
+  margin-bottom: 16px;
 }
 
 .shared-collection-members .shared-file-view h2,
@@ -2397,8 +2405,8 @@ textarea:focus-visible,
   max-width: 100%;
   overflow: auto;
   margin: 0;
-  padding: 24px 0;
-  border-block: 1px solid var(--line-strong);
+  padding: 18px 0;
+  border-block: 1px solid var(--line);
   color: var(--text);
   font-family: var(--font-geist-sans), sans-serif;
   font-size: 15px;
@@ -2413,9 +2421,9 @@ textarea:focus-visible,
 
 .shared-link-url {
   max-width: 100%;
-  margin: 0;
-  padding: 24px 0;
-  border-block: 1px solid var(--line-strong);
+  margin: 10px 0 0;
+  padding: 12px 0 16px;
+  border-block: 1px solid var(--line);
   color: var(--text);
   font-family: var(--font-geist-mono), monospace;
   font-size: 13px;
@@ -2770,6 +2778,14 @@ textarea:focus-visible,
     width: calc(100% - 32px);
     min-height: calc(100svh - 68px);
     padding-top: 46px;
+  }
+
+  .shared-collection-members {
+    gap: 12px;
+  }
+
+  .shared-collection-members > article {
+    padding: 18px 16px 16px;
   }
 
   .share-verify h1,
