@@ -2,6 +2,7 @@ import {
   bulkActionSchema,
   createLinkSchema,
   createTextSchema,
+  isHttpOrHttpsUrl,
   listItemsQuerySchema,
   updateItemSchema,
 } from "../../packages/contracts";
@@ -53,6 +54,10 @@ export function registerItemRoutes(api: ApiApp): void {
       return errorResponse(c.get("requestId"), "INVALID_LINK", "请输入有效的网址", 400);
     }
     const url = new URL(parsed.data.url);
+    // 契约已限制协议，这里再拒绝一次，避免解析后的规范化 URL 绕过白名单。
+    if (!isHttpOrHttpsUrl(url.toString())) {
+      return errorResponse(c.get("requestId"), "INVALID_LINK", "请输入有效的网址", 400);
+    }
     const item = await c.env.services.metadata.items.createItem({
       ownerId: c.get("identity").ownerId,
       type: "link",
@@ -71,6 +76,9 @@ export function registerItemRoutes(api: ApiApp): void {
     if (!item) return errorResponse(c.get("requestId"), "NOT_FOUND", "条目不存在", 404);
     if (item.type === "file" && (parsed.data.content !== undefined || parsed.data.title !== undefined)) {
       return errorResponse(c.get("requestId"), "INVALID_UPDATE", "文件只能修改显示名称和收藏状态", 400);
+    }
+    if (item.type === "link" && parsed.data.content !== undefined && !isHttpOrHttpsUrl(parsed.data.content)) {
+      return errorResponse(c.get("requestId"), "INVALID_LINK", "请输入有效的网址", 400);
     }
     const updated = await c.env.services.metadata.items.updateItem(
       c.get("identity").ownerId,

@@ -50,6 +50,7 @@ import type {
   UploadPartUrl,
   UploadSessionResponse,
 } from "../packages/contracts";
+import { isHttpOrHttpsUrl } from "../packages/contracts";
 import { api, withRetry } from "./client/api";
 import { formatBytes, formatTime, typeLabel } from "./client/format";
 import {
@@ -65,10 +66,10 @@ type View = "timeline" | "favorites" | "shares" | "cleanup" | "trash";
 type Theme = "system" | "light" | "dark";
 type TimelineOrder = "newest-top" | "newest-bottom";
 type ComposerPosition = "top" | "bottom";
-function TypeIcon({ type }: { type: ItemType }) {
-  if (type === "text") return <FileText size={17} />;
-  if (type === "link") return <Link2 size={17} />;
-  return <File size={17} />;
+function TypeIcon({ type, size = 17 }: { type: ItemType; size?: number }) {
+  if (type === "text") return <FileText size={size} />;
+  if (type === "link") return <Link2 size={size} />;
+  return <File size={size} />;
 }
 
 function itemDisplayLabel(item: DropItem): string {
@@ -562,7 +563,7 @@ export function DropApp() {
   const itemsById = new Map(items.map((item) => [item.id, item]));
   const selectedItems = [...selected].map((id) => itemsById.get(id)).filter((item): item is DropItem => Boolean(item));
   const selectedItemsCanShare = selectedItems.length <= 50
-    && selectedItems.every((item) => item.type === "text" || item.type === "file");
+    && selectedItems.every((item) => item.type === "text" || item.type === "file" || item.type === "link");
 
   const selectedBytes = visibleItems
     .filter((item) => selected.has(item.id) && item.type === "file")
@@ -1181,7 +1182,7 @@ function ShareManager({
         <div className="empty-state share-empty">
           <Share2 size={24} />
           <strong>还没有分享</strong>
-          <span>选择一个或多个文本、文件后创建分享集合</span>
+          <span>选择一个或多个文本、链接或文件后创建分享集合</span>
         </div>
       ) : (
         <div className="share-list">
@@ -1200,7 +1201,7 @@ function ShareManager({
                 <div className="share-member-preview">
                   {share.members.slice(0, 4).map((member) => (
                     <span key={member.itemId} title={member.itemLabel}>
-                      {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
+                      <TypeIcon type={member.itemType} size={12} />
                       <span className="share-member-label">{member.itemLabel}</span>
                     </span>
                   ))}
@@ -1355,7 +1356,7 @@ function ShareDialog({
   );
 }
 
-type ShareDraftMember = { label: string; type: "text" | "file" };
+type ShareDraftMember = { label: string; type: ItemType };
 
 function ShareMemberPicker({
   selected,
@@ -1419,7 +1420,7 @@ function ShareMemberPicker({
       if (checked) {
         next.set(item.id, {
           label: itemDisplayLabel(item),
-          type: item.type === "file" ? "file" : "text",
+          type: item.type,
         });
       } else {
         next.delete(item.id);
@@ -1455,7 +1456,7 @@ function ShareMemberPicker({
             ) : choices.length === 0 ? (
               <span className="share-choice-loading">没有匹配内容</span>
             ) : choices.map((item) => {
-              const shareable = item.type === "text" || item.type === "file";
+              const shareable = item.type === "text" || item.type === "file" || item.type === "link";
               const alreadyMember = selected.has(item.id);
               const checked = draftSelected.has(item.id);
               const disabled = !shareable || alreadyMember || (!checked && draftSelected.size >= 50);
@@ -1469,7 +1470,7 @@ function ShareMemberPicker({
                   />
                   <TypeIcon type={item.type} />
                   <span>{itemDisplayLabel(item)}</span>
-                  {!shareable ? <small>链接不可分享</small> : alreadyMember ? <small>已在集合中</small> : null}
+                  {alreadyMember ? <small>已在集合中</small> : null}
                 </label>
               );
             })}
@@ -1575,14 +1576,14 @@ function ShareEditDialog({
             <div>
               {share.members.map((member) => selected.has(member.itemId) && (
                 <span key={member.itemId}>
-                  {member.itemType === "file" ? <File size={12} /> : <FileText size={12} />}
+                  <TypeIcon type={member.itemType} size={12} />
                   <span className="share-member-label" title={member.itemLabel}>{member.itemLabel}</span>
                   <button onClick={() => removeMember(member.itemId)} aria-label={`取消 ${member.itemLabel}`}><X size={12} /></button>
                 </span>
               ))}
               {[...addedMembers].map(([itemId, member]) => selected.has(itemId) && (
                 <span key={itemId}>
-                  {member.type === "file" ? <File size={12} /> : <FileText size={12} />}
+                  <TypeIcon type={member.type} size={12} />
                   <span className="share-member-label" title={member.label}>{member.label}</span>
                   <button onClick={() => removeMember(itemId)} aria-label={`取消 ${member.label}`}><X size={12} /></button>
                 </span>
@@ -1712,9 +1713,18 @@ function ItemEntry({
         ) : item.type === "link" ? (
           <div className="link-content">
             <strong>{item.title}</strong>
-            <a href={item.content || "#"} target="_blank" rel="noopener noreferrer">
-              <span>{item.content}</span><ExternalLink size={14} />
-            </a>
+            {item.content && isHttpOrHttpsUrl(item.content) ? (
+              <a
+                href={item.content}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+                referrerPolicy="no-referrer"
+              >
+                <span>{item.content}</span><ExternalLink size={14} />
+              </a>
+            ) : (
+              <span className="link-url-text">{item.content}</span>
+            )}
           </div>
         ) : (
           <div className="file-content">
@@ -1748,7 +1758,7 @@ function ItemEntry({
           ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /></button>
         )}
         {!trash && <button onClick={() => setEditing(true)} aria-label="编辑" title="编辑"><Pencil size={16} /></button>}
-        {!trash && (item.type === "text" || item.type === "file") && (
+        {!trash && (item.type === "text" || item.type === "file" || item.type === "link") && (
           <button className={activeShareCount > 0 ? "active-share" : ""} onClick={onShare} aria-label="分享" title="分享">
             <Share2 size={16} />
           </button>

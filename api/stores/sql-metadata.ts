@@ -811,9 +811,10 @@ export class SqlMetadataStore implements MetadataStore {
   private async validShareItems(ownerId: string, itemIds: string[]): Promise<boolean> {
     if (itemIds.length === 0 || itemIds.length > SHARE_MAX_ITEMS) return false;
     const placeholders = itemIds.map(() => "?").join(", ");
+    // 链接与文本、文件一样可以作为集合成员；协议合法性在公开组装时再校验。
     const rows = await this.sql.all<{ id: string }>(
       `SELECT id FROM items WHERE owner_id = ? AND deleted_at IS NULL
-       AND type IN ('text', 'file') AND id IN (${placeholders})`,
+       AND type IN ('text', 'file', 'link') AND id IN (${placeholders})`,
       [ownerId, ...itemIds],
     );
     return rows.length === itemIds.length;

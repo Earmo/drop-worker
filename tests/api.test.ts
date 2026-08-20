@@ -14,6 +14,7 @@ import { SqlMetadataStore, type SqlExecutor } from "../api/stores/sql-metadata";
 import { decryptShareCode, encryptShareCode, keyedDigest, tokenForShare } from "../api/sharing";
 import { createShareSchema } from "../packages/contracts";
 import type {
+  ApiError,
   CreateShareResponse,
   DropItem,
   ListItemsResponse,
@@ -651,7 +652,7 @@ test("分享集合支持有序成员管理、跨集合回收站联动和历史�
     ]);
     const link = (await (await request(current.services, "/api/items/link", {
       method: "POST",
-      body: JSON.stringify({ url: "https://example.com", title: "不可分享链接" }),
+      body: JSON.stringify({ url: "https://example.com", title: "文档来源" }),
     })).json()) as DropItem;
 
     const createdResponse = await request(current.services, "/api/shares", {
@@ -681,13 +682,24 @@ test("分享集合支持有序成员管理、跨集合回收站联动和历史�
     })).json()) as CreateShareResponse;
     await current.services.metadata.shares.recordShareDownload(created.share.id, first.id, Date.now());
 
-    const invalidUpdate = await request(current.services, `/api/shares/${created.share.id}`, {
+    const withLink = await request(current.services, `/api/shares/${created.share.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ itemIds: [second.id, link.id] }),
+      body: JSON.stringify({ itemIds: [first.id, second.id, link.id] }),
     });
-    assert.equal(invalidUpdate.status, 409);
-    const unchanged = (await (await request(current.services, `/api/public/shares/${token}`)).json()) as PublicShareContent;
-    assert.deepEqual(unchanged.members.map((member) => member.id), [first.id, second.id]);
+    assert.equal(withLink.status, 200);
+    const withLinkSummary = (await withLink.json()) as { share: CreateShareResponse["share"] };
+    assert.deepEqual(withLinkSummary.share.members.map((member) => member.itemId), [first.id, second.id, link.id]);
+    assert.equal(withLinkSummary.share.members[2]?.itemType, "link");
+    assert.equal(withLinkSummary.share.members[2]?.itemLabel, "文档来源");
+    assert.equal(withLinkSummary.share.members[2]?.downloadCount, 0);
+    const publicWithLink = (await (await request(current.services, `/api/public/shares/${token}`)).json()) as PublicShareContent;
+    assert.deepEqual(publicWithLink.members.map((member) => member.id), [first.id, second.id, link.id]);
+    const publicLink = publicWithLink.members[2];
+    assert.equal(publicLink?.type, "link");
+    if (publicLink?.type === "link") {
+      assert.equal(publicLink.url, "https://example.com/");
+      assert.equal(publicLink.title, "文档来源");
+    }
 
     const updated = await request(current.services, `/api/shares/${created.share.id}`, {
       method: "PATCH",
@@ -730,6 +742,96 @@ test("分享集合支持有序成员管理、跨集合回收站联动和历史�
     assert.equal((await request(current.services, `/api/public/shares/${token}`)).status, 404);
     const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
     assert.equal(listed.shares.some((share) => share.id === created.share.id), false);
+  } finally {
+    await current.close();
+  }
+});
+
+test("创建链接拒绝非 http(s) 协议", async () => {
+  const current = await fixture();
+  try {
+    for (const url of ["javascript:alert(1)", "data:text/html,hi", "file:///tmp/x"]) {
+      const response = await request(current.services, "/api/items/link", {
+        method: "POST",
+        body: JSON.stringify({ url, title: "非法协议" }),
+      });
+      assert.equal(response.status, 400);
+      const payload = (await response.json()) as ApiError;
+      assert.equal(payload.error.code, "INVALID_LINK");
+    }
+  } finally {
+    await current.close();
+  }
+});
+
+test("公开分享会剔除非法协议的链接成员", async () => {
+  const current = await fixture();
+  try {
+    const text = (await (await request(current.services, "/api/items/text", {
+      method: "POST",
+      body: JSON.stringify({ content: "可见文本" }),
+    })).json()) as DropItem;
+    const dirty = await current.services.metadata.items.createItem({
+      ownerId: "test-owner",
+      type: "link",
+      content: "javascript:alert(1)",
+      title: "恶意标题",
+    });
+    const untitled = await current.services.metadata.items.createItem({
+      ownerId: "test-owner",
+      type: "link",
+      content: "https://docs.example/path",
+      title: null,
+    });
+    const createdResponse = await request(current.services, "/api/shares", {
+      method: "POST",
+      body: JSON.stringify({
+        itemIds: [text.id, dirty.id, untitled.id],
+        accessMode: "public",
+        expiresInSeconds: 86_400,
+      }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = (await createdResponse.json()) as CreateShareResponse;
+    assert.equal(created.share.members.find((member) => member.itemId === untitled.id)?.itemLabel, "docs.example");
+    assert.equal(created.share.downloadCount, 0);
+    const token = new URL(created.shareUrl).pathname.split("/").at(-1)!;
+    const publicResponse = await request(current.services, `/api/public/shares/${token}`);
+    assert.equal(publicResponse.status, 200);
+    const body = await publicResponse.text();
+    assert.doesNotMatch(body, /javascript:/);
+    assert.doesNotMatch(body, /恶意标题/);
+    const content = JSON.parse(body) as PublicShareContent;
+    assert.deepEqual(content.members.map((member) => member.id), [text.id, untitled.id]);
+    const publicLink = content.members[1];
+    assert.equal(publicLink?.type, "link");
+    if (publicLink?.type === "link") {
+      assert.equal(publicLink.url, "https://docs.example/path");
+      assert.equal(publicLink.title, "");
+    }
+
+    const listed = (await (await request(current.services, "/api/shares")).json()) as ListSharesResponse;
+    assert.equal(listed.shares[0]?.accessCount, 1);
+    assert.equal(listed.shares[0]?.downloadCount, 0);
+    assert.equal(listed.shares[0]?.members.find((member) => member.itemId === dirty.id)?.itemType, "link");
+
+    const codeShareResponse = await request(current.services, "/api/shares", {
+      method: "POST",
+      body: JSON.stringify({
+        itemIds: [untitled.id],
+        accessMode: "code",
+        code: "0042",
+        expiresInSeconds: 86_400,
+      }),
+    });
+    assert.equal(codeShareResponse.status, 201);
+    const codeShare = (await codeShareResponse.json()) as CreateShareResponse;
+    const codeToken = new URL(codeShare.shareUrl).pathname.split("/").at(-1)!;
+    const protectedContent = await request(current.services, `/api/public/shares/${codeToken}`);
+    assert.equal(protectedContent.status, 401);
+    const protectedBody = await protectedContent.text();
+    assert.doesNotMatch(protectedBody, /docs\.example/);
+    assert.doesNotMatch(protectedBody, /https:\/\/docs\.example\/path/);
   } finally {
     await current.close();
   }

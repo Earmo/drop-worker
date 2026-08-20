@@ -27,8 +27,21 @@ export const createTextSchema = z.object({
   content: z.string().trim().min(1).max(65_536),
 });
 
+/**
+ * 保存和公开分享只接受 http(s)。zod 的 `.url()` 会放行 `javascript:` 等协议，
+ * 因此必须再按协议白名单收紧，避免实例域名变成任意跳转落地页。
+ */
+export function isHttpOrHttpsUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export const createLinkSchema = z.object({
-  url: z.string().url().max(4_096),
+  url: z.string().url().max(4_096).refine(isHttpOrHttpsUrl, "请输入有效的网址"),
   title: z.string().trim().max(240).optional(),
 });
 
@@ -191,7 +204,7 @@ export type UpdateShareInput = z.infer<typeof updateShareSchema>;
 
 export const shareMemberSummarySchema = z.object({
   itemId: z.string().uuid(),
-  itemType: z.enum(["text", "file"]),
+  itemType: z.enum(["text", "link", "file"]),
   itemLabel: z.string(),
   position: z.number().int().nonnegative(),
   addedAt: z.number().int(),
@@ -230,6 +243,13 @@ export const publicShareMemberSchema = z.discriminatedUnion("type", [
     id: z.string().uuid(),
     type: z.literal("text"),
     content: z.string(),
+    updatedAt: z.number().int(),
+  }),
+  z.object({
+    id: z.string().uuid(),
+    type: z.literal("link"),
+    url: z.string(),
+    title: z.string(),
     updatedAt: z.number().int(),
   }),
   z.object({

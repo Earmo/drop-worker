@@ -987,10 +987,16 @@ textarea:focus-visible,
   text-decoration: none;
 }
 
-.link-content a span {
+.link-content a span,
+.link-content .link-url-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.link-content .link-url-text {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .file-content {
@@ -2246,7 +2252,8 @@ textarea:focus-visible,
   border-top: 1px solid var(--line-strong);
 }
 
-.shared-collection-members .shared-file-view h2 {
+.shared-collection-members .shared-file-view h2,
+.shared-collection-members .shared-link-view h2 {
   max-width: 100%;
   margin: 0;
   overflow-wrap: anywhere;
@@ -2258,7 +2265,8 @@ textarea:focus-visible,
 .share-verify,
 .share-missing,
 .shared-file-view,
-.shared-text-view {
+.shared-text-view,
+.shared-link-view {
   width: min(100%, 620px);
   animation: share-rise 220ms ease both;
 }
@@ -2399,7 +2407,28 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.shared-link-title {
+  margin: 0 0 8px;
+}
+
+.shared-link-url {
+  max-width: 100%;
+  margin: 0;
+  padding: 24px 0;
+  border-block: 1px solid var(--line-strong);
+  color: var(--text);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.shared-link-view .share-primary {
+  margin-top: 18px;
+}
+
 .shared-text-view footer,
+.shared-link-view footer,
 .shared-file-view footer {
   margin-top: 18px;
   color: var(--text-muted);

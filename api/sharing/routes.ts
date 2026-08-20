@@ -20,6 +20,7 @@ import {
   shareStatus,
   shareDisplayName,
   shareSummary,
+  publicShareMembers,
   tokenForShare,
   verifyKeyedDigest,
 } from "./helpers";
@@ -100,24 +101,15 @@ export function registerPublicShareRoutes(api: ApiApp): void {
     ) {
       return errorResponse(c.get("requestId"), "SHARE_VERIFICATION_REQUIRED", "请确认访问口令", 401);
     }
+    const members = publicShareMembers(share);
+    // 可见成员被协议校验剔空后，按分享已失效处理，避免返回空集合。
+    if (members.length === 0) {
+      return errorResponse(c.get("requestId"), "NOT_FOUND", "分享不存在或已失效", 404);
+    }
     const content: PublicShareContent = {
       name: shareDisplayName(share),
       expiresAt: share.expiresAt,
-      members: activeShareMembers(share).map((member) => member.item.type === "file"
-        ? {
-            id: member.itemId,
-            type: "file" as const,
-            fileName: member.item.displayName || member.item.originalName || "download",
-            mimeType: member.item.mimeType || "application/octet-stream",
-            sizeBytes: member.item.sizeBytes,
-            updatedAt: member.item.updatedAt,
-          }
-        : {
-            id: member.itemId,
-            type: "text" as const,
-            content: member.item.content || "",
-            updatedAt: member.item.updatedAt,
-          }),
+      members,
     };
     await c.env.services.metadata.shares.recordShareAccess(share.id, now);
     c.header("cache-control", "private, no-store");

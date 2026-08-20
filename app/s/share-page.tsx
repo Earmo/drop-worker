@@ -5,9 +5,11 @@ import {
   Check,
   Copy,
   Download,
+  ExternalLink,
   File,
   FileText,
   KeyRound,
+  Link2,
   LoaderCircle,
   ShieldCheck,
 } from "lucide-react";
@@ -25,6 +27,17 @@ type ViewState =
   | { kind: "verify" }
   | { kind: "content"; content: PublicShareContent }
   | { kind: "missing" };
+
+function sharedLinkTitle(title: string, url: string): string {
+  // 标题为空时回退主机名，与集合自动命名一致，且不把完整 URL 当作卡片标题。
+  const trimmed = title.trim();
+  if (trimmed) return trimmed;
+  try {
+    return new URL(url).hostname || "未命名链接";
+  } catch {
+    return "未命名链接";
+  }
+}
 
 async function errorCode(response: Response): Promise<string | null> {
   try {
@@ -148,52 +161,90 @@ export function PublicSharePage({ token }: { token: string }) {
               <p>{state.content.members.length} 项 · 到期于 {formatTime(state.content.expiresAt)}</p>
             </div>
             <div className="shared-collection-members">
-              {state.content.members.map((member) => member.type === "text" ? (
-                <article className="shared-text-view" key={member.id}>
-                  <div className="shared-content-heading">
-                    <div><FileText size={18} /><p className="share-kicker">共享文本</p></div>
-                    <button
-                      className="icon-button"
-                      onClick={() => {
-                        void navigator.clipboard.writeText(member.content).then(() => {
-                          setCopiedId(member.id);
-                          window.setTimeout(() => setCopiedId(null), 1400);
-                        });
-                      }}
-                      aria-label="复制文本"
-                      title="复制文本"
-                    >{copiedId === member.id ? <Check size={17} /> : <Copy size={17} />}</button>
-                  </div>
-                  <pre>{member.content}</pre>
-                  <footer>更新于 {formatTime(member.updatedAt)}</footer>
-                </article>
-              ) : (
-                <article className="shared-file-view" key={member.id}>
-                  <span className="share-stage-icon"><File size={25} /></span>
-                  <p className="share-kicker">共享文件</p>
-                  <h2>{member.fileName}</h2>
-                  <p>{formatBytes(member.sizeBytes)} · {member.mimeType}</p>
-                  {isPreviewableImage(member.mimeType) && (
-                    <figure className="shared-image-preview">
-                      {/* 预览必须直连带分享 Cookie 的同源接口，不能交给图片优化代理缓存。 */}
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/preview`}
-                        alt={member.fileName}
-                        decoding="async"
+              {state.content.members.map((member) => {
+                if (member.type === "text") {
+                  return (
+                    <article className="shared-text-view" key={member.id}>
+                      <div className="shared-content-heading">
+                        <div><FileText size={18} /><p className="share-kicker">共享文本</p></div>
+                        <button
+                          className="icon-button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(member.content).then(() => {
+                              setCopiedId(member.id);
+                              window.setTimeout(() => setCopiedId(null), 1400);
+                            });
+                          }}
+                          aria-label="复制文本"
+                          title="复制文本"
+                        >{copiedId === member.id ? <Check size={17} /> : <Copy size={17} />}</button>
+                      </div>
+                      <pre>{member.content}</pre>
+                      <footer>更新于 {formatTime(member.updatedAt)}</footer>
+                    </article>
+                  );
+                }
+                if (member.type === "link") {
+                  // 标题只作展示，不做成外链，避免把真实跳转目标藏在锚文本里。
+                  return (
+                    <article className="shared-link-view" key={member.id}>
+                      <div className="shared-content-heading">
+                        <div><Link2 size={18} /><p className="share-kicker">共享链接</p></div>
+                        <button
+                          className="icon-button"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(member.url).then(() => {
+                              setCopiedId(member.id);
+                              window.setTimeout(() => setCopiedId(null), 1400);
+                            });
+                          }}
+                          aria-label="复制链接"
+                          title="复制链接"
+                        >{copiedId === member.id ? <Check size={17} /> : <Copy size={17} />}</button>
+                      </div>
+                      <h2 className="shared-link-title">{sharedLinkTitle(member.title, member.url)}</h2>
+                      <p className="shared-link-url">{member.url}</p>
+                      <a
+                        className="share-primary"
+                        href={member.url}
+                        target="_blank"
+                        rel="noopener noreferrer nofollow"
                         referrerPolicy="no-referrer"
-                      />
-                    </figure>
-                  )}
-                  <a
-                    className="share-primary"
-                    href={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/download`}
-                  >
-                    <Download size={18} /> 下载文件
-                  </a>
-                  <footer>更新于 {formatTime(member.updatedAt)}</footer>
-                </article>
-              ))}
+                      >
+                        <ExternalLink size={18} /> 打开
+                      </a>
+                      <footer>更新于 {formatTime(member.updatedAt)}</footer>
+                    </article>
+                  );
+                }
+                return (
+                  <article className="shared-file-view" key={member.id}>
+                    <span className="share-stage-icon"><File size={25} /></span>
+                    <p className="share-kicker">共享文件</p>
+                    <h2>{member.fileName}</h2>
+                    <p>{formatBytes(member.sizeBytes)} · {member.mimeType}</p>
+                    {isPreviewableImage(member.mimeType) && (
+                      <figure className="shared-image-preview">
+                        {/* 预览必须直连带分享 Cookie 的同源接口，不能交给图片优化代理缓存。 */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/preview`}
+                          alt={member.fileName}
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                        />
+                      </figure>
+                    )}
+                    <a
+                      className="share-primary"
+                      href={`/api/public/shares/${encodeURIComponent(token)}/items/${member.id}/download`}
+                    >
+                      <Download size={18} /> 下载文件
+                    </a>
+                    <footer>更新于 {formatTime(member.updatedAt)}</footer>
+                  </article>
+                );
+              })}
             </div>
           </div>
         )}

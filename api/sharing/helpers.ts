@@ -4,7 +4,7 @@
  * 路由层只处理 HTTP；token 哈希、四位口令加密和访客 Cookie 都集中在这里，
  * 避免公开接口与属主管理接口各自实现一套校验。
  */
-import type { ShareStatus, ShareSummary } from "../../packages/contracts";
+import { isHttpOrHttpsUrl, type PublicShareMember, type ShareStatus, type ShareSummary } from "../../packages/contracts";
 import type { StoredItem, StoredShare, StoredShareMember } from "../platform";
 import { readCookie } from "../auth/shared";
 
@@ -142,6 +142,16 @@ function itemLabel(item: StoredItem): string {
   if (item.type === "file") {
     return item.displayName || item.originalName || "未命名文件";
   }
+  if (item.type === "link") {
+    // 自动集合名用标题或主机名，避免把完整 URL 写进管理列表。
+    const title = item.title?.trim();
+    if (title) return title;
+    try {
+      return new URL(item.content || "").hostname || "未命名链接";
+    } catch {
+      return "未命名链接";
+    }
+  }
   const content = item.content?.trim() || "未命名文本";
   return content.length > 80 ? `${content.slice(0, 80)}…` : content;
 }
@@ -151,8 +161,47 @@ export function activeShareMembers(share: StoredShare): Array<StoredShareMember 
   return share.members.filter(
     (member): member is StoredShareMember & { item: StoredItem } =>
       member.removedAt === null && member.item !== null && member.item.deletedAt === null
-        && (member.item.type === "text" || member.item.type === "file"),
+        && (member.item.type === "text" || member.item.type === "file" || member.item.type === "link"),
   );
+}
+
+/**
+ * 组装访客可见成员。非法协议的链接按已失效剔除，不进入公开响应，也不做静默修复。
+ */
+export function publicShareMembers(share: StoredShare): PublicShareMember[] {
+  const members: PublicShareMember[] = [];
+  for (const member of activeShareMembers(share)) {
+    if (member.item.type === "file") {
+      members.push({
+        id: member.itemId,
+        type: "file",
+        fileName: member.item.displayName || member.item.originalName || "download",
+        mimeType: member.item.mimeType || "application/octet-stream",
+        sizeBytes: member.item.sizeBytes,
+        updatedAt: member.item.updatedAt,
+      });
+      continue;
+    }
+    if (member.item.type === "link") {
+      const url = member.item.content || "";
+      if (!isHttpOrHttpsUrl(url)) continue;
+      members.push({
+        id: member.itemId,
+        type: "link",
+        url,
+        title: member.item.title || "",
+        updatedAt: member.item.updatedAt,
+      });
+      continue;
+    }
+    members.push({
+      id: member.itemId,
+      type: "text",
+      content: member.item.content || "",
+      updatedAt: member.item.updatedAt,
+    });
+  }
+  return members;
 }
 
 /** 自定义名称保持稳定；自动名称始终跟随当前首个成员和成员数量。 */
@@ -183,7 +232,7 @@ export function shareSummary(
     customName: share.name,
     members: members.map((member) => ({
       itemId: member.itemId,
-      itemType: member.item.type === "file" ? "file" as const : "text" as const,
+      itemType: member.item.type,
       itemLabel: itemLabel(member.item),
       position: member.position,
       addedAt: member.addedAt,
