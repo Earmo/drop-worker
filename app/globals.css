@@ -1501,16 +1501,21 @@ textarea:focus-visible,
 
 .share-list {
   display: grid;
+  gap: 10px;
+  padding-top: 14px;
 }
 
+/* 与时间流行、公开页成员一致：用卡片分组，避免只靠底部分割线区分集合。 */
 .share-row {
   display: grid;
   grid-template-columns: 38px minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   min-height: 88px;
-  padding: 14px 2px;
-  border-bottom: 1px solid var(--line);
+  padding: 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
 }
 
 .share-row.status-expired,
@@ -2748,6 +2753,7 @@ textarea:focus-visible,
   .share-row {
     grid-template-columns: 34px minmax(0, 1fr);
     align-items: start;
+    padding: 12px;
   }
 
   .share-row-icon {
