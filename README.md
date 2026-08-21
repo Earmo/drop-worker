@@ -6,10 +6,20 @@ Drop Worker 是一个单用户、私有的跨设备投递箱，用于保存文�
 
 ## 界面预览
 
+### 桌面端
+
 <p align="center">
   <img src="docs/images/drop-worker-login.png" alt="Drop Worker 登录页" width="88%" /><br />
   <img src="docs/images/drop-worker-workspace.png" alt="Drop Worker 时间流工作区" width="88%" /><br />
   <img src="docs/images/drop-worker-cleanup.png" alt="Drop Worker 存储清理" width="88%" />
+</p>
+
+### 移动端
+
+<p align="center">
+  <img src="docs/images/drop-worker-login-mobile.png" alt="Drop Worker 移动端登录页" width="30%" />
+  <img src="docs/images/drop-worker-workspace-mobile.png" alt="Drop Worker 移动端时间流工作区" width="30%" />
+  <img src="docs/images/drop-worker-cleanup-mobile.png" alt="Drop Worker 移动端存储清理" width="30%" />
 </p>
 
 ## 部署入口
