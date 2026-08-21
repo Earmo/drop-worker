@@ -10,6 +10,7 @@ import {
   Clipboard,
   Copy,
   Download,
+  EllipsisVertical,
   ExternalLink,
   File,
   FileText,
@@ -94,6 +95,7 @@ export function DropApp() {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploads, setUploads] = useState<UploadTask[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>("system");
   const [timelineOrder, setTimelineOrder] = useState<TimelineOrder>("newest-bottom");
   const [composerPosition, setComposerPosition] = useState<ComposerPosition>("bottom");
@@ -106,6 +108,7 @@ export function DropApp() {
   const [shareTargets, setShareTargets] = useState<DropItem[]>([]);
   const [editingShare, setEditingShare] = useState<ShareSummary | null>(null);
   const refreshVersion = useRef(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const feedScrollRef = useRef<HTMLElement>(null);
   const historyLoaderRef = useRef<HTMLDivElement>(null);
   const loadingMoreRequest = useRef(false);
@@ -301,6 +304,14 @@ export function DropApp() {
     setView(next);
     setSelected(new Set());
     setSidebarOpen(false);
+    // 切走当前列表时收起搜索框，避免窄屏顶栏继续占着输入态。
+    setSearchOpen(false);
+  };
+
+  const searching = searchOpen || Boolean(query);
+  const openSearch = () => {
+    setSearchOpen(true);
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
   };
 
   const runItemAction = async (
@@ -615,28 +626,51 @@ export function DropApp() {
       />
 
       <main className={`workspace${timelineView ? " timeline-fixed-workspace" : ""}`}>
-        <header className="workspace-header">
+        {/* 窄屏把搜索收成图标，展开后顶替标题，避免搜索条常驻占一行。 */}
+        <header className={`workspace-header${searching ? " is-searching" : ""}`}>
           <button className="icon-button mobile-menu" onClick={() => setSidebarOpen(true)} aria-label="打开导航">
             <Menu size={19} />
           </button>
-          <div>
+          <div className="workspace-heading">
             <p className="workspace-eyebrow">{auth.email}</p>
             <h1>{viewTitle}</h1>
           </div>
-          {view !== "shares" && <div className="search-field">
-            <Search size={17} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索内容、链接或文件名"
-              aria-label="搜索"
-            />
-            {query && (
-              <button onClick={() => setQuery("")} aria-label="清除搜索">
-                <X size={15} />
+          {view !== "shares" && (
+            <>
+              <button
+                className="icon-button search-toggle"
+                onClick={openSearch}
+                aria-label="搜索"
+              >
+                <Search size={18} />
               </button>
-            )}
-          </div>}
+              <div className="search-field">
+                <Search size={17} />
+                <input
+                  ref={searchInputRef}
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      if (query) setQuery("");
+                      else setSearchOpen(false);
+                    }
+                  }}
+                  placeholder="搜索内容、链接或文件名"
+                  aria-label="搜索"
+                />
+                {query ? (
+                  <button onClick={() => setQuery("")} aria-label="清除搜索">
+                    <X size={15} />
+                  </button>
+                ) : searchOpen ? (
+                  <button onClick={() => setSearchOpen(false)} aria-label="关闭搜索">
+                    <X size={15} />
+                  </button>
+                ) : null}
+              </div>
+            </>
+          )}
         </header>
 
         {auth.insecureHttp && (
@@ -708,11 +742,6 @@ export function DropApp() {
               ))}
             </div>
             <div className="feed-toolbar-actions">
-              {visibleItems.length > 0 && (
-                <button onClick={() => setSelected(new Set(visibleItems.map((item) => item.id)))}>
-                  <CheckSquare2 size={14} /> 全选
-                </button>
-              )}
               {view === "trash" && (
                 <button className="danger" onClick={() => void emptyTrash()}>
                   <Trash2 size={14} /> 清空回收站
@@ -727,6 +756,12 @@ export function DropApp() {
               <CheckSquare2 size={17} />
               <strong>已选 {selected.size} 项{selectedBytes > 0 ? ` · 可释放 ${formatBytes(selectedBytes)}` : ""}</strong>
               <div className="bulk-actions">
+                {/* 全选只在勾选条目后出现，避免浏览时工具条再占一行。 */}
+                {selected.size < visibleItems.length && (
+                  <button onClick={() => setSelected(new Set(visibleItems.map((item) => item.id)))}>
+                    <CheckSquare2 size={15} /> 全选
+                  </button>
+                )}
                 {view === "trash" ? (
                   <>
                     <button onClick={() => void runItemAction([...selected], "restore")}>
@@ -845,7 +880,6 @@ export function DropApp() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
-      <MobileNav view={view} onView={changeView} />
     </div>
   );
 }
@@ -1005,8 +1039,11 @@ function Composer({
   const [text, setText] = useState(initialText);
   const [sending, setSending] = useState(false);
   const [draggingFiles, setDraggingFiles] = useState(false);
+  const [focused, setFocused] = useState(false);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  // 窄屏默认收成一行；聚焦、已有正文或待传文件时再展开，避免浏览列表时被输入框挤掉。
+  const composerActive = focused || Boolean(text.trim()) || pendingFiles.length > 0;
   const addFiles = (files: File[]) => {
     // 拖拽、粘贴和文件选择器共用入口；这里只过滤单文件上限，最终仍由 API 再次校验。
     const valid = files.filter((file) => file.size <= 500 * 1024 * 1024);
@@ -1021,7 +1058,7 @@ function Composer({
   };
   return (
     <section
-      className={`composer${draggingFiles ? " is-dragging" : ""}`}
+      className={`composer${draggingFiles ? " is-dragging" : ""}${composerActive ? "" : " is-collapsed"}`}
       aria-label="投递输入区域"
       onDragEnter={(event) => {
         if (sending || !event.dataTransfer.types.includes("Files")) return;
@@ -1057,7 +1094,10 @@ function Composer({
       )}
       <textarea
         value={text}
+        rows={composerActive ? 3 : 1}
         onChange={(event) => setText(event.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         onPaste={(event) => {
           const files = Array.from(event.clipboardData.files);
           if (files.length) addFiles(files);
@@ -1657,6 +1697,20 @@ function ItemEntry({
   const [draft, setDraft] = useState(item.type === "file" ? item.displayName || "" : item.type === "link" ? item.title || "" : item.content || "");
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // 窄屏把次要操作收进菜单后，点卡片外要能关掉，避免挡住下一条。
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [menuOpen]);
+
+  const closeMenu = () => setMenuOpen(false);
   const save = async () => {
     // 三种条目共享编辑入口，但可编辑字段不同：文件改显示名，链接改标题，文本改正文。
     const changes = item.type === "file" ? { displayName: draft } : item.type === "link" ? { title: draft } : { content: draft };
@@ -1748,34 +1802,97 @@ function ItemEntry({
           </div>
         )}
       </div>
-      <div className="item-actions">
-        {!trash && (
-          <button
-            className={item.favorite ? "active favorite" : ""}
-            onClick={() => void onUpdate(item.id, { favorite: !item.favorite })}
-            aria-label={item.favorite ? "取消收藏" : "收藏"}
-            title={item.favorite ? "取消收藏" : "收藏"}
-          ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /></button>
-        )}
-        {!trash && <button onClick={() => setEditing(true)} aria-label="编辑" title="编辑"><Pencil size={16} /></button>}
-        {!trash && (item.type === "text" || item.type === "file" || item.type === "link") && (
-          <button className={activeShareCount > 0 ? "active-share" : ""} onClick={onShare} aria-label="分享" title="分享">
-            <Share2 size={16} />
-          </button>
-        )}
-        {(item.type === "text" || item.type === "link") && !trash && (
-          <button onClick={() => void copy().then(() => onNotice("已复制"))} aria-label="复制" title="复制">
-            {copied ? <Check size={16} /> : <Copy size={16} />}
-          </button>
-        )}
-        {trash ? (
-          <>
-            <button onClick={onRestore} aria-label="恢复" title="恢复"><RotateCcw size={16} /></button>
-            <button className="danger" onClick={onPurge} aria-label="永久删除" title="永久删除"><Trash2 size={16} /></button>
-          </>
-        ) : (
-          <button className="danger" onClick={onTrash} aria-label="移入回收站" title="移入回收站"><Trash2 size={16} /></button>
-        )}
+      <div className={`item-actions${menuOpen ? " is-open" : ""}`} ref={menuRef}>
+        <button
+          className="item-menu-toggle"
+          onClick={() => setMenuOpen((value) => !value)}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          aria-label="更多操作"
+          title="更多操作"
+        >
+          <EllipsisVertical size={16} />
+        </button>
+        <div className="item-actions-panel" role="menu">
+          {!trash && (
+            <button
+              className={item.favorite ? "active favorite" : ""}
+              onClick={() => {
+                closeMenu();
+                void onUpdate(item.id, { favorite: !item.favorite });
+              }}
+              aria-label={item.favorite ? "取消收藏" : "收藏"}
+              title={item.favorite ? "取消收藏" : "收藏"}
+            ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /><span>{item.favorite ? "取消收藏" : "收藏"}</span></button>
+          )}
+          {!trash && (
+            <button
+              onClick={() => {
+                closeMenu();
+                setEditing(true);
+              }}
+              aria-label="编辑"
+              title="编辑"
+            ><Pencil size={16} /><span>编辑</span></button>
+          )}
+          {!trash && (item.type === "text" || item.type === "file" || item.type === "link") && (
+            <button
+              className={activeShareCount > 0 ? "active-share" : ""}
+              onClick={() => {
+                closeMenu();
+                onShare();
+              }}
+              aria-label="分享"
+              title="分享"
+            >
+              <Share2 size={16} /><span>分享</span>
+            </button>
+          )}
+          {(item.type === "text" || item.type === "link") && !trash && (
+            <button
+              onClick={() => {
+                closeMenu();
+                void copy().then(() => onNotice("已复制"));
+              }}
+              aria-label="复制"
+              title="复制"
+            >
+              {copied ? <Check size={16} /> : <Copy size={16} />}
+              <span>{copied ? "已复制" : "复制"}</span>
+            </button>
+          )}
+          {trash ? (
+            <>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  onRestore();
+                }}
+                aria-label="恢复"
+                title="恢复"
+              ><RotateCcw size={16} /><span>恢复</span></button>
+              <button
+                className="danger"
+                onClick={() => {
+                  closeMenu();
+                  onPurge();
+                }}
+                aria-label="永久删除"
+                title="永久删除"
+              ><Trash2 size={16} /><span>永久删除</span></button>
+            </>
+          ) : (
+            <button
+              className="danger"
+              onClick={() => {
+                closeMenu();
+                onTrash();
+              }}
+              aria-label="移入回收站"
+              title="移入回收站"
+            ><Trash2 size={16} /><span>移入回收站</span></button>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -1919,11 +2036,3 @@ function EmptyState({ view, query }: { view: View; query: string }) {
   );
 }
 
-function MobileNav({ view, onView }: { view: View; onView(view: View): void }) {
-  const values = [
-    { value: "timeline" as const, icon: ArchiveRestore, label: "时间流" },
-    { value: "favorites" as const, icon: Star, label: "收藏" },
-    { value: "shares" as const, icon: Share2, label: "分享" },
-  ];
-  return <nav className="mobile-nav">{values.map(({ value, icon: Icon, label }) => <button key={value} className={view === value ? "active" : ""} onClick={() => onView(value)}><Icon size={18} /><span>{label}</span></button>)}</nav>;
-}

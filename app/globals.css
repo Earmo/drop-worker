@@ -321,7 +321,7 @@ textarea:focus-visible,
   backdrop-filter: blur(18px);
 }
 
-.workspace-header > div:nth-child(2) {
+.workspace-heading {
   min-width: 144px;
 }
 
@@ -379,6 +379,11 @@ textarea:focus-visible,
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
+}
+
+.search-toggle {
+  display: none;
+  margin-left: auto;
 }
 
 .workspace-body {
@@ -1059,9 +1064,28 @@ textarea:focus-visible,
 }
 
 .item-actions {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 1px;
+}
+
+.item-menu-toggle {
+  display: none;
+}
+
+.item-actions-panel {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.item-actions-panel button span {
+  display: none;
+}
+
+.feed-item:has(.item-actions.is-open) {
+  z-index: 5;
 }
 
 .item-actions button.active.favorite {
@@ -1328,7 +1352,6 @@ textarea:focus-visible,
 }
 
 .mobile-menu,
-.mobile-nav,
 .sidebar-scrim {
   display: none;
 }
@@ -2541,6 +2564,11 @@ textarea:focus-visible,
     padding: 12px 18px;
   }
 
+  .workspace-heading {
+    min-width: 0;
+    flex: 1;
+  }
+
   .workspace-eyebrow {
     max-width: 150px;
   }
@@ -2574,10 +2602,13 @@ textarea:focus-visible,
 @media (max-width: 640px) {
   .workspace-header {
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    min-height: 52px;
+    gap: 8px;
+    padding: 8px 12px;
   }
 
-  .workspace-header > div:nth-child(2) {
+  .workspace-heading {
     min-width: 0;
     flex: 1;
   }
@@ -2586,20 +2617,39 @@ textarea:focus-visible,
     display: none;
   }
 
-  .search-field {
-    order: 3;
-    width: 100%;
-    height: 39px;
+  .workspace-header h1 {
+    font-size: 17px;
+  }
+
+  /* 搜索默认收成顶栏图标；展开后顶替标题，不再单独占一行。 */
+  .search-toggle {
+    display: inline-grid;
+  }
+
+  .workspace-header:not(.is-searching) .search-field {
+    display: none;
+  }
+
+  .workspace-header.is-searching .workspace-heading,
+  .workspace-header.is-searching .search-toggle {
+    display: none;
+  }
+
+  .workspace-header.is-searching .search-field {
+    display: flex;
+    width: auto;
+    flex: 1;
+    height: 36px;
     margin-left: 0;
   }
 
   .workspace-body {
     width: calc(100% - 22px);
-    padding: 18px 0 104px;
+    padding: 14px 0 24px;
   }
 
   .workspace-body.timeline-fixed-layout {
-    padding: 10px 0 calc(78px + env(safe-area-inset-bottom));
+    padding: 8px 0 calc(12px + env(safe-area-inset-bottom));
   }
 
   .composer-bottom-layout > .composer {
@@ -2610,17 +2660,17 @@ textarea:focus-visible,
     margin-bottom: 8px;
   }
 
-  .timeline-fixed-layout .composer textarea {
-    min-height: 64px;
+  .timeline-fixed-layout .composer:not(.is-collapsed) textarea {
+    min-height: 72px;
     max-height: 20svh;
   }
 
-  .timeline-fixed-layout .composer-footer {
+  .timeline-fixed-layout .composer:not(.is-collapsed) .composer-footer {
     min-height: 50px;
   }
 
   .timeline-fixed-layout .bulk-bar {
-    top: 84px;
+    top: 8px;
   }
 
   .settings-option-control {
@@ -2628,10 +2678,33 @@ textarea:focus-visible,
   }
 
   .composer {
-    margin-bottom: 18px;
+    margin-bottom: 12px;
   }
 
-  .composer textarea {
+  /* 未聚焦时输入框和操作挤在一行，浏览列表时少占一截屏。 */
+  .composer.is-collapsed {
+    display: flex;
+    align-items: center;
+  }
+
+  .composer.is-collapsed textarea {
+    flex: 1;
+    min-height: 44px;
+    max-height: 44px;
+    resize: none;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .composer.is-collapsed .composer-footer {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 4px 6px 4px 0;
+    border-top: 0;
+    background: transparent;
+  }
+
+  .composer:not(.is-collapsed) textarea {
     min-height: 92px;
     padding: 16px 16px 10px;
     font-size: 14px;
@@ -2647,30 +2720,32 @@ textarea:focus-visible,
 
   .feed-toolbar {
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 8px;
+    margin-bottom: 8px;
   }
 
-  /* 回收站操作较多时让筛选和操作各占一行，避免筛选组被压缩出横向滚动。 */
   .segmented {
-    display: grid;
-    width: 100%;
+    display: inline-flex;
+    width: auto;
     max-width: none;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    overflow-x: visible;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
   }
 
   .segmented button {
     min-width: 0;
+    flex: 1;
   }
 
   .feed-toolbar-actions {
-    width: 100%;
-    justify-content: flex-end;
+    width: auto;
+    flex: 0 0 auto;
   }
 
   .feed-item {
-    grid-template-columns: 24px 34px minmax(0, 1fr);
+    grid-template-columns: 24px 34px minmax(0, 1fr) 34px;
     gap: 8px;
     padding: 13px 10px 12px 8px;
   }
@@ -2680,11 +2755,48 @@ textarea:focus-visible,
     height: 34px;
   }
 
+  .item-menu-toggle {
+    display: inline-grid;
+  }
+
   .item-actions {
-    grid-column: 2 / -1;
     justify-content: flex-end;
-    padding-top: 2px;
-    border-top: 1px solid var(--line);
+  }
+
+  .item-actions-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 6;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 148px;
+    padding: 6px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+  }
+
+  .item-actions.is-open .item-actions-panel {
+    display: flex;
+  }
+
+  .item-actions-panel button {
+    width: 100%;
+    height: 36px;
+    justify-items: start;
+    padding: 0 8px;
+    grid-auto-flow: column;
+    grid-auto-columns: 20px 1fr;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .item-actions-panel button span {
+    display: inline;
+    color: inherit;
   }
 
   .cleanup-summary {
@@ -2708,7 +2820,7 @@ textarea:focus-visible,
   }
 
   .bulk-bar {
-    top: 123px;
+    top: 56px;
     align-items: flex-start;
     flex-wrap: wrap;
   }
@@ -2725,23 +2837,6 @@ textarea:focus-visible,
 
   .resume-button {
     margin-left: 48px;
-  }
-
-  .mobile-nav {
-    position: fixed;
-    right: 10px;
-    bottom: 10px;
-    left: 10px;
-    z-index: 16;
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    min-height: 60px;
-    padding: 5px;
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--surface) 92%, transparent);
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(18px);
   }
 
   .share-manager-heading {
@@ -2805,26 +2900,9 @@ textarea:focus-visible,
     grid-template-columns: 1fr;
   }
 
-  .mobile-nav button {
-    display: grid;
-    place-items: center;
-    align-content: center;
-    gap: 4px;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-muted);
-    font-size: 9px;
-  }
-
-  .mobile-nav button.active {
-    background: var(--surface-strong);
-    color: var(--surface);
-  }
-
   .toast {
     right: 16px;
-    bottom: 82px;
+    bottom: 16px;
     left: 16px;
     max-width: none;
     text-align: center;

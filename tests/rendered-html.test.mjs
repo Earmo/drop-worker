@@ -50,8 +50,7 @@ test("成品源码包含核心工作区且不再引用预览骨架", async () =>
 test("视图筛选切换会清理选择，并使用通用文件选择器", async () => {
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.match(app, /const changeView = \(next: View\) => \{[\s\S]*?setSelected\(new Set\(\)\)/);
-  assert.match(app, /<MobileNav view=\{view\} onView=\{changeView\} \/>/);
-  assert.doesNotMatch(app, /<MobileNav view=\{view\} onView=\{setView\} \/>/);
+  assert.doesNotMatch(app, /function MobileNav/);
   assert.match(app, /setType\(value\);\s*setSelected\(new Set\(\)\)/);
   assert.match(app, /type="file"[\s\S]*?accept="\*\/\*"/g);
   assert.equal((app.match(/accept="\*\/\*"/g) || []).length, 2);
@@ -112,18 +111,20 @@ test("四种时间流与输入框组合都使用固定工作区并只滚动列�
   assert.match(css, /\.timeline-fixed-layout \.timeline-feed-region/);
 });
 
-test("移动端只显示三项底部导航并持续展示有效分享链接", async () => {
+test("移动端去掉底栏，搜索、投递和卡片操作按需展开", async () => {
   const [app, css] = await Promise.all([
     readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
-  const mobileNav = app.slice(app.indexOf("function MobileNav"));
-  assert.match(mobileNav, /timeline/);
-  assert.match(mobileNav, /favorites/);
-  assert.match(mobileNav, /shares/);
-  assert.doesNotMatch(mobileNav, /cleanup|trash/);
+  assert.doesNotMatch(app, /function MobileNav/);
+  assert.doesNotMatch(css, /\.mobile-nav\b/);
+  assert.match(app, /className="icon-button search-toggle"/);
+  assert.match(app, /composerActive \? "" : " is-collapsed"/);
+  assert.match(app, /className="item-menu-toggle"/);
+  assert.match(app, /selected\.size < visibleItems\.length && \([\s\S]*?全选/);
   assert.match(app, /className="share-row-url"/);
-  assert.match(css, /grid-template-columns: repeat\(3, 1fr\)/);
+  assert.match(css, /\.composer\.is-collapsed/);
+  assert.match(css, /\.workspace-header\.is-searching/);
 });
 
 test("复制口令分享链接时包含预填口令", async () => {
