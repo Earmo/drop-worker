@@ -752,9 +752,12 @@ export function DropApp() {
           </div>
 
           {selected.size > 0 && (
-            <div className="bulk-bar">
+            <div className="bulk-bar" role="toolbar" aria-label="已选条目操作">
               <CheckSquare2 size={17} />
-              <strong>已选 {selected.size} 项{selectedBytes > 0 ? ` · 可释放 ${formatBytes(selectedBytes)}` : ""}</strong>
+              <strong>
+                已选 {selected.size} 项
+                {selectedBytes > 0 ? <span className="bulk-bar-bytes"> · {formatBytes(selectedBytes)}</span> : null}
+              </strong>
               <div className="bulk-actions">
                 {/* 全选只在勾选条目后出现，避免浏览时工具条再占一行。 */}
                 {selected.size < visibleItems.length && (
@@ -768,7 +771,10 @@ export function DropApp() {
                       <RotateCcw size={15} /> 恢复
                     </button>
                     <button className="danger" onClick={() => void runItemAction([...selected], "purge")}>
-                      <Trash2 size={15} /> 永久删除
+                      <Trash2 size={15} />
+                      {/* 窄屏用短文案，避免选择条折成两行盖住列表。 */}
+                      <span className="bulk-action-full">永久删除</span>
+                      <span className="bulk-action-short">删除</span>
                     </button>
                   </>
                 ) : (
@@ -781,7 +787,7 @@ export function DropApp() {
                       <Share2 size={15} /> 分享
                     </button>
                     <button className="danger" onClick={() => void runItemAction([...selected], "trash")}>
-                      <Trash2 size={15} /> 移入回收站
+                      <Trash2 size={15} /> <span className="bulk-action-full">移入回收站</span><span className="bulk-action-short">删除</span>
                     </button>
                   </>
                 )}

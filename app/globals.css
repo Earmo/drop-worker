@@ -798,7 +798,13 @@ textarea:focus-visible,
 }
 
 .bulk-bar strong {
+  min-width: 0;
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.bulk-action-short {
+  display: none;
 }
 
 .bulk-actions {
@@ -2670,7 +2676,7 @@ textarea:focus-visible,
   }
 
   .timeline-fixed-layout .bulk-bar {
-    top: 8px;
+    top: auto;
   }
 
   .settings-option-control {
@@ -2819,15 +2825,58 @@ textarea:focus-visible,
     grid-column: auto;
   }
 
+  /* 选择条改贴底部单行：顶栏已经挤，折行还会盖住第一张卡片。 */
   .bulk-bar {
-    top: 56px;
-    align-items: flex-start;
-    flex-wrap: wrap;
+    position: fixed;
+    top: auto;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    left: 10px;
+    z-index: 16;
+    flex-wrap: nowrap;
+    align-items: center;
+    min-height: 48px;
+    margin: 0;
+    padding: 6px 8px 6px 12px;
+    background: var(--surface-strong);
+  }
+
+  .bulk-bar > svg {
+    display: none;
+  }
+
+  .bulk-bar strong {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
   }
 
   .bulk-actions {
-    width: 100%;
+    width: auto;
+    flex: 0 0 auto;
     margin-left: 0;
+  }
+
+  .bulk-actions > button:not(.icon-button) {
+    min-height: 34px;
+    padding: 0 8px;
+  }
+
+  .bulk-action-full {
+    display: none;
+  }
+
+  .bulk-action-short {
+    display: inline;
+  }
+
+  .feed-region:has(.bulk-bar) {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom));
+  }
+
+  .app-shell:has(.bulk-bar) .toast {
+    bottom: 76px;
   }
 
   .upload-task {

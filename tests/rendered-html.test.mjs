@@ -122,9 +122,11 @@ test("移动端去掉底栏，搜索、投递和卡片操作按需展开", async
   assert.match(app, /composerActive \? "" : " is-collapsed"/);
   assert.match(app, /className="item-menu-toggle"/);
   assert.match(app, /selected\.size < visibleItems\.length && \([\s\S]*?全选/);
+  assert.match(app, /className="bulk-action-short"/);
   assert.match(app, /className="share-row-url"/);
   assert.match(css, /\.composer\.is-collapsed/);
   assert.match(css, /\.workspace-header\.is-searching/);
+  assert.match(css, /\.bulk-bar \{\s*position: fixed/);
 });
 
 test("复制口令分享链接时包含预填口令", async () => {
