@@ -58,7 +58,9 @@ jobs:
       - name: 构建并推送镜像
         uses: docker/build-push-action@v7
         with:
+          # COPY 的来源仍是仓库根目录，构建文件单独位于 deploy/。
           context: .
+          file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
