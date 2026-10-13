@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowDownToLine,
   ArrowUp,
+  ArrowUpToLine,
   Check,
   CheckSquare2,
   Clipboard,
@@ -21,10 +22,12 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  Minimize2,
   Moon,
   Paperclip,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Send,
@@ -90,6 +93,7 @@ export function DropApp() {
   const [query, setQuery] = useState("");
   const [type, setType] = useState<ItemType | "all">("all");
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -188,9 +192,11 @@ export function DropApp() {
   }, [query, type, view]);
 
   const loadData = useCallback(
-    async (quiet = false) => {
+    async (quiet = false, notify = false) => {
       if (!auth?.authenticated) return;
       const current = ++refreshVersion.current;
+      historyScrollAnchor.current = null;
+      setRefreshing(true);
       if (!quiet) setLoading(true);
       try {
         // 列表和存储摘要并行加载；current 防止较慢的旧请求覆盖用户刚切换筛选条件后的新结果。
@@ -205,17 +211,27 @@ export function DropApp() {
         setStorage(summary);
         setShares(shareList.shares);
         setClock(Date.now());
+        // 刷新会重取第一页，只保留仍在列表中的选择，避免批量操作包含已消失的条目。
+        setSelected((previous) => new Set(list.items.filter((item) => previous.has(item.id)).map((item) => item.id)));
+        if (notify) showNotice("列表已更新");
       } catch (error) {
-        if (!quiet) showNotice(error instanceof Error ? error.message : "加载失败");
+        if (current === refreshVersion.current && (!quiet || notify)) {
+          showNotice(error instanceof Error ? error.message : "加载失败");
+        }
       } finally {
-        if (!quiet && current === refreshVersion.current) setLoading(false);
+        // 静默刷新也可能取代首次加载；以最新请求为准结束两种加载状态。
+        if (current === refreshVersion.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [auth?.authenticated, listParams, showNotice],
   );
 
   const loadMore = useCallback(async () => {
-    if (nextCursor === null || loadingMoreRequest.current) return;
+    if (nextCursor === null || loading || refreshing || loadingMoreRequest.current) return;
+    const current = refreshVersion.current;
     loadingMoreRequest.current = true;
     setLoadingMore(true);
     const scrollContainer = timelineNewestAtBottom ? feedScrollRef.current : null;
@@ -229,19 +245,22 @@ export function DropApp() {
     try {
       // 使用服务端返回的 offset cursor 追加下一页，并按 id 去重。
       const list = await api<ListItemsResponse>(`/api/items?${listParams(nextCursor)}`);
+      // 刷新或筛选已经开始时，丢弃旧 offset 的结果，防止旧分页混进新列表。
+      if (current !== refreshVersion.current) return;
       setItems((previous) => {
         const existing = new Set(previous.map((item) => item.id));
         return [...previous, ...list.items.filter((item) => !existing.has(item.id))];
       });
       setNextCursor(list.nextCursor);
     } catch (error) {
+      if (current !== refreshVersion.current) return;
       historyScrollAnchor.current = null;
       showNotice(error instanceof Error ? error.message : "加载更多失败");
     } finally {
       loadingMoreRequest.current = false;
       setLoadingMore(false);
     }
-  }, [listParams, nextCursor, showNotice, timelineNewestAtBottom]);
+  }, [listParams, loading, nextCursor, refreshing, showNotice, timelineNewestAtBottom]);
 
   useLayoutEffect(() => {
     const anchor = historyScrollAnchor.current;
@@ -580,6 +599,15 @@ export function DropApp() {
     .filter((item) => selected.has(item.id) && item.type === "file")
     .reduce((total, item) => total + item.sizeBytes, 0);
 
+  const scrollToEdge = (edge: "top" | "bottom") => {
+    // 时间流有独立滚动区；其他视图随文档滚动，不触发分页或改变排序。
+    const container = timelineView ? feedScrollRef.current : document.scrollingElement;
+    container?.scrollTo({
+      top: edge === "top" ? 0 : container.scrollHeight,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  };
+
   if (!auth || !auth.authenticated) {
     return <LoginScreen auth={auth} onAuthenticated={async () => setAuth(await loadAuth())} />;
   }
@@ -606,6 +634,16 @@ export function DropApp() {
   const uploadQueue = uploads.length > 0 ? (
     <UploadQueue tasks={uploads} onResume={resumeUpload} onCancel={cancelUpload} />
   ) : null;
+  const scrollNavigation = (
+    <nav className="scroll-navigation" aria-label="列表滚动">
+      <button className="icon-button" onClick={() => scrollToEdge("top")} aria-label="回到顶部" title="回到顶部">
+        <ArrowUpToLine size={18} />
+      </button>
+      <button className="icon-button" onClick={() => scrollToEdge("bottom")} aria-label="回到底部" title="回到底部">
+        <ArrowDownToLine size={18} />
+      </button>
+    </nav>
+  );
 
   return (
     <div className="app-shell">
@@ -671,6 +709,18 @@ export function DropApp() {
               </div>
             </>
           )}
+          {/* 文档滚动视图的导航放在固定顶栏，滚动后仍能返回顶部。 */}
+          {!timelineView && scrollNavigation}
+          <button
+            className="icon-button refresh-button"
+            onClick={() => void loadData(true, true)}
+            disabled={loading || refreshing || loadingMore}
+            aria-label="刷新列表"
+            aria-busy={refreshing}
+            title={refreshing ? "正在刷新" : "刷新列表"}
+          >
+            <RefreshCw size={18} className={refreshing ? "spin" : undefined} />
+          </button>
         </header>
 
         {auth.insecureHttp && (
@@ -710,20 +760,22 @@ export function DropApp() {
           )}
 
           {view === "shares" && (
-            <ShareManager
-              shares={shares}
-              onCopy={(value, kind) => void navigator.clipboard.writeText(value).then(() => showNotice(`分享${kind}已复制`))}
-              onEdit={setEditingShare}
-              onTerminate={async (share) => {
-                if (!window.confirm(`删除“${share.name}”？原链接将立即失效且不可恢复。`)) return;
-                await api(`/api/shares/${share.id}`, { method: "DELETE" });
-                showNotice("分享集合已删除");
-                await loadData(true);
-              }}
-            />
+            <div className="feed-scroll-layout">
+              <ShareManager
+                shares={shares}
+                onCopy={(value, kind) => void navigator.clipboard.writeText(value).then(() => showNotice(`分享${kind}已复制`))}
+                onEdit={setEditingShare}
+                onTerminate={async (share) => {
+                  if (!window.confirm(`删除“${share.name}”？原链接将立即失效且不可恢复。`)) return;
+                  await api(`/api/shares/${share.id}`, { method: "DELETE" });
+                  showNotice("分享集合已删除");
+                  await loadData(true);
+                }}
+              />
+            </div>
           )}
 
-          {view !== "shares" && <section
+          {view !== "shares" && <div className="feed-scroll-layout"><section
             className={`feed-region${timelineView ? " timeline-feed-region" : ""}${timelineNewestAtBottom ? " newest-bottom" : ""}`}
             ref={timelineView ? feedScrollRef : undefined}
           ><div className="feed-toolbar">
@@ -748,6 +800,7 @@ export function DropApp() {
                 </button>
               )}
               <span className="result-count">{visibleItems.length} 项</span>
+              {timelineView && scrollNavigation}
             </div>
           </div>
 
@@ -850,7 +903,7 @@ export function DropApp() {
                 {loadingMore ? "正在加载" : "加载更多"}
               </button>
             </div>
-          )}</section>}
+          )}</section></div>}
           {timelineComposerAtBottom && uploadQueue}
           {timelineComposerAtBottom && timelineComposer}
         </section>
@@ -1705,9 +1758,34 @@ function ItemEntry({
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
+  const menuToggleRef = useRef<HTMLButtonElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const isImage = item.type === "file" && Boolean(item.mimeType?.startsWith("image/"));
+
+  useLayoutEffect(() => {
+    // 关闭菜单后把键盘焦点交给编辑框，避免焦点停留在隐藏的菜单项。
+    if (editing) editorRef.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea")?.focus();
+  }, [editing]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen || !menuRef.current || !menuPanelRef.current) return;
+    // 菜单限制在可见列表内；底部条目向上避让，短视口允许菜单内部滚动。
+    const scrollContainer = menuRef.current.closest(".timeline-feed-region");
+    const bounds = scrollContainer?.getBoundingClientRect();
+    const toolbar = scrollContainer?.querySelector(".feed-toolbar")?.getBoundingClientRect();
+    const anchor = menuRef.current.getBoundingClientRect();
+    const panel = menuPanelRef.current;
+    // 顶部筛选栏固定在滚动区内，短视口需要扣除它占用的高度。
+    const top = Math.max(8, toolbar?.bottom ?? bounds?.top ?? 0);
+    const bottom = Math.min(window.innerHeight, bounds?.bottom ?? window.innerHeight) - 8;
+    panel.style.maxHeight = `${Math.max(36, bottom - top)}px`;
+    panel.style.top = `${Math.max(top, Math.min(anchor.bottom + 4, bottom - panel.offsetHeight)) - anchor.top}px`;
+    panel.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+  }, [menuOpen]);
 
   useEffect(() => {
-    // 窄屏把次要操作收进菜单后，点卡片外要能关掉，避免挡住下一条。
+    // 所有屏幕统一使用更多菜单；点击外部时关闭，避免遮挡其他条目。
     if (!menuOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
@@ -1724,9 +1802,18 @@ function ItemEntry({
     setEditing(false);
   };
   const copy = async () => {
-    await navigator.clipboard.writeText(item.content || item.displayName || item.originalName || "");
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1400);
+    try {
+      // 图片复制受身份保护的访问地址，不自动创建公开分享，也不复制图片二进制。
+      const value = isImage
+        ? new URL(`/api/files/${item.id}`, window.location.origin).href
+        : item.content || "";
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      onNotice(isImage ? "图片地址已复制" : "已复制");
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      onNotice("复制失败，请检查浏览器剪贴板权限");
+    }
   };
   return (
     <article className={`feed-item ${selected ? "selected" : ""} ${trash ? "trashed" : ""}`}>
@@ -1746,7 +1833,7 @@ function ItemEntry({
           {trash && item.deletedAt && <span>剩余 {Math.max(0, 30 - Math.floor((now - item.deletedAt) / 86_400_000))} 天</span>}
         </div>
         {editing ? (
-          <div className="inline-editor">
+          <div className="inline-editor" ref={editorRef}>
             {item.type === "text" ? (
               <textarea value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={65_536} />
             ) : (
@@ -1760,11 +1847,12 @@ function ItemEntry({
             role="button"
             tabIndex={0}
             aria-expanded={expanded}
-            onClick={() => setExpanded((value) => !value)}
+            // 选中文字也会触发 click；正文只展开，收起必须通过菜单明确操作。
+            onClick={() => setExpanded(true)}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                setExpanded((value) => !value);
+                setExpanded(true);
               }
             }}
           >
@@ -1808,9 +1896,16 @@ function ItemEntry({
           </div>
         )}
       </div>
-      <div className={`item-actions${menuOpen ? " is-open" : ""}`} ref={menuRef}>
+      <div
+        className={`item-actions${menuOpen ? " is-open" : ""}`}
+        ref={menuRef}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
+        }}
+      >
         <button
           className="item-menu-toggle"
+          ref={menuToggleRef}
           onClick={() => setMenuOpen((value) => !value)}
           aria-expanded={menuOpen}
           aria-haspopup="menu"
@@ -1819,9 +1914,41 @@ function ItemEntry({
         >
           <EllipsisVertical size={16} />
         </button>
-        <div className="item-actions-panel" role="menu">
+        <div
+          className="item-actions-panel"
+          role="menu"
+          aria-label="条目操作"
+          tabIndex={-1}
+          ref={menuPanelRef}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              closeMenu();
+              menuToggleRef.current?.focus({ preventScroll: true });
+            }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1
+              : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+            buttons[next]?.focus();
+          }}
+        >
+          {item.type === "text" && expanded && !editing && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                closeMenu();
+                setExpanded(false);
+                menuToggleRef.current?.focus({ preventScroll: true });
+              }}
+              aria-label="收起文本"
+              title="收起文本"
+            ><Minimize2 size={16} /><span>收起文本</span></button>
+          )}
           {!trash && (
             <button
+              role="menuitem"
               className={item.favorite ? "active favorite" : ""}
               onClick={() => {
                 closeMenu();
@@ -1833,8 +1960,11 @@ function ItemEntry({
           )}
           {!trash && (
             <button
+              role="menuitem"
               onClick={() => {
                 closeMenu();
+                // 可能刚从其他设备刷新了内容；每次打开编辑都以当前条目为准。
+                setDraft(item.type === "file" ? item.displayName || "" : item.type === "link" ? item.title || "" : item.content || "");
                 setEditing(true);
               }}
               aria-label="编辑"
@@ -1843,6 +1973,7 @@ function ItemEntry({
           )}
           {!trash && (item.type === "text" || item.type === "file" || item.type === "link") && (
             <button
+              role="menuitem"
               className={activeShareCount > 0 ? "active-share" : ""}
               onClick={() => {
                 closeMenu();
@@ -1854,22 +1985,24 @@ function ItemEntry({
               <Share2 size={16} /><span>分享</span>
             </button>
           )}
-          {(item.type === "text" || item.type === "link") && !trash && (
+          {(item.type === "text" || item.type === "link" || isImage) && !trash && (
             <button
+              role="menuitem"
               onClick={() => {
                 closeMenu();
-                void copy().then(() => onNotice("已复制"));
+                void copy();
               }}
               aria-label="复制"
-              title="复制"
+              title={isImage ? "复制图片地址" : "复制"}
             >
               {copied ? <Check size={16} /> : <Copy size={16} />}
-              <span>{copied ? "已复制" : "复制"}</span>
+              <span>{copied ? "已复制" : isImage ? "复制图片地址" : "复制"}</span>
             </button>
           )}
           {trash ? (
             <>
               <button
+                role="menuitem"
                 onClick={() => {
                   closeMenu();
                   onRestore();
@@ -1878,6 +2011,7 @@ function ItemEntry({
                 title="恢复"
               ><RotateCcw size={16} /><span>恢复</span></button>
               <button
+                role="menuitem"
                 className="danger"
                 onClick={() => {
                   closeMenu();
@@ -1889,6 +2023,7 @@ function ItemEntry({
             </>
           ) : (
             <button
+              role="menuitem"
               className="danger"
               onClick={() => {
                 closeMenu();
