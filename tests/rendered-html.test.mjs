@@ -91,7 +91,7 @@ test("时间流顺序与输入框位置可以独立设置", async () => {
   assert.match(app, /<Settings2 size=\{16\} \/> 设置/);
   assert.doesNotMatch(app, /时间流设置/);
   assert.match(css, /\.timeline-fixed-workspace/);
-  assert.match(css, /\.composer-bottom-layout \.timeline-feed-region/);
+  assert.match(css, /\.composer-bottom-layout \.feed-scroll-layout/);
   assert.match(css, /\.composer-bottom-layout > \.composer/);
   assert.match(app, /feed\$\{timelineNewestAtBottom && !loading && visibleItems\.length === 0 \? " is-empty" : ""\}/);
   assert.match(css, /\.feed-region\.newest-bottom \.feed\.is-empty/);
@@ -129,6 +129,14 @@ test("移动端去掉底栏，搜索、投递和卡片操作按需展开", async
   assert.match(css, /\.bulk-bar \{\s*position: fixed/);
 });
 
+test("独立搜索按钮只在移动端显示，且不被通用图标按钮样式覆盖", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const [desktopCss, mobileCss] = css.split("@media (max-width: 640px)");
+  assert.match(desktopCss, /\.workspace-header \.search-toggle \{\s*display: none/);
+  assert.match(mobileCss, /\.workspace-header \.search-toggle \{\s*display: inline-grid/);
+  assert.match(mobileCss, /\.workspace-header\.is-searching \.search-toggle \{\s*display: none/);
+});
+
 test("复制口令分享链接时包含预填口令", async () => {
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.match(app, /onCopy\(`\$\{share\.shareUrl\}\$\{share\.code \? `#code=\$\{share\.code\}` : ""\}`/);
@@ -139,6 +147,77 @@ test("文本正文使用可选择的文本元素，而不是按钮承载正文",
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(app, /<button className=\{`text-content/);
   assert.match(app, /className=\{`text-content[\s\S]*?role="button"/);
+});
+
+test("文本点击和键盘操作只展开，收起入口位于更多菜单", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(app, /setExpanded\(\(value\) => !value\)/);
+  assert.match(app, /onClick=\{\(\) => setExpanded\(true\)\}/);
+  assert.match(app, /event\.key === "Enter"[\s\S]*?setExpanded\(true\)/);
+  assert.match(app, /className="item-actions-panel"[\s\S]*?setExpanded\(false\)[\s\S]*?收起文本/);
+});
+
+test("所有屏幕的条目编辑和分享都由更多菜单触发", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  const desktopCss = css.split("@media (max-width: 860px)")[0];
+  assert.match(desktopCss, /\.item-actions-panel \{\s*display: none/);
+  assert.match(desktopCss, /\.item-actions\.is-open \.item-actions-panel \{\s*display: flex/);
+  assert.match(app, /className="item-actions-panel"[\s\S]*?aria-label="编辑"[\s\S]*?aria-label="分享"/);
+  assert.match(app, /if \(editing\) editorRef\.current\?\.querySelector[\s\S]*?\.focus\(\)/);
+  assert.match(app, /toolbar\?\.bottom \?\? bounds\?\.top/);
+});
+
+test("手动刷新保留列表并反馈状态，过期分页不得混入新列表", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /onClick=\{\(\) => void loadData\(true, true\)\}/);
+  assert.match(app, /disabled=\{loading \|\| refreshing \|\| loadingMore\}/);
+  assert.match(app, /aria-label="刷新列表"/);
+  assert.match(app, /if \(notify\) showNotice\("列表已更新"\)/);
+  assert.match(app, /const loadMore[\s\S]*?if \(current !== refreshVersion\.current\) return/);
+});
+
+test("图片复制使用带来源的访问地址，并报告剪贴板失败", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  assert.match(app, /const isImage = item\.type === "file" && Boolean\(item\.mimeType\?\.startsWith\("image\/"\)\)/);
+  assert.match(app, /new URL\(`\/api\/files\/\$\{item\.id\}`, window\.location\.origin\)\.href/);
+  assert.match(app, /item\.type === "text" \|\| item\.type === "link" \|\| isImage/);
+  assert.match(app, /复制失败/);
+});
+
+test("顶部和底部按钮滚动当前工作区并尊重减少动画设置", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(app, /aria-label="回到顶部"/);
+  assert.match(app, /aria-label="回到底部"/);
+  assert.match(app, /timelineView \? feedScrollRef\.current : document\.scrollingElement/);
+  assert.match(app, /prefers-reduced-motion: reduce/);
+  assert.match(css, /\.feed-scroll-layout/);
+  assert.match(css, /\.scroll-navigation \{\s*display: flex/);
+});
+
+test("各尺寸滚动按钮均位于常驻工具栏，不为侧栏保留空位", async () => {
+  const [app, css] = await Promise.all([
+    readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(css, /\.feed-scroll-layout \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(css, /\.workspace-heading \+ \.scroll-navigation \{\s*margin-left: auto/);
+  assert.doesNotMatch(app + css, /mobile-scroll-navigation/);
+  assert.equal(app.match(/&& scrollNavigation/g)?.length, 2);
+  assert.doesNotMatch(app, /\{scrollNavigation\}/);
+  assert.match(app, /!timelineView && scrollNavigation/);
+  assert.match(app, /className="feed-toolbar-actions"[\s\S]*?timelineView && scrollNavigation/);
+});
+
+test("顶栏和正文共用响应式居中宽度", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /\.workspace-header \{[^}]*padding: 15px max\(var\(--workspace-gutter\), calc\(\(100% - var\(--workspace-content-width\)\) \/ 2\)\)/);
+  assert.match(css, /\.workspace-body \{\s*width: min\(var\(--workspace-content-width\), calc\(100% - 2 \* var\(--workspace-gutter\)\)\)/);
 });
 
 test("分享图片预览仍复用受保护的分享路径", async () => {

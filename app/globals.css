@@ -290,6 +290,9 @@ textarea:focus-visible,
 }
 
 .workspace {
+  /* 顶栏和正文共用宽度与边距，宽屏下搜索区也跟随内容居中。 */
+  --workspace-content-width: 900px;
+  --workspace-gutter: 24px;
   min-height: 100svh;
   margin-left: 244px;
 }
@@ -315,7 +318,7 @@ textarea:focus-visible,
   min-height: 88px;
   align-items: center;
   gap: 24px;
-  padding: 15px clamp(24px, 4vw, 58px);
+  padding: 15px max(var(--workspace-gutter), calc((100% - var(--workspace-content-width)) / 2));
   border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(18px);
@@ -344,6 +347,7 @@ textarea:focus-visible,
 .search-field {
   display: flex;
   width: min(520px, 48vw);
+  min-width: 0;
   height: 42px;
   align-items: center;
   gap: 9px;
@@ -381,13 +385,23 @@ textarea:focus-visible,
   cursor: pointer;
 }
 
-.search-toggle {
+/* 限定顶栏优先级，避免后面的通用图标按钮样式在桌面端重新显示搜索入口。 */
+.workspace-header .search-toggle {
   display: none;
   margin-left: auto;
 }
 
+.refresh-button {
+  flex: 0 0 34px;
+}
+
+.workspace-heading + .refresh-button,
+.workspace-heading + .scroll-navigation {
+  margin-left: auto;
+}
+
 .workspace-body {
-  width: min(900px, calc(100% - 48px));
+  width: min(var(--workspace-content-width), calc(100% - 2 * var(--workspace-gutter)));
   margin: 0 auto;
   padding: 34px 0 90px;
 }
@@ -398,6 +412,37 @@ textarea:focus-visible,
   flex: 1;
   flex-direction: column;
   padding: 18px 0;
+}
+
+/* 滚动操作放在常驻工具栏，列表只保留内容列。 */
+.feed-scroll-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.timeline-fixed-layout .feed-scroll-layout {
+  min-height: 0;
+  flex: 1;
+  align-items: stretch;
+}
+
+.scroll-navigation {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.scroll-navigation > button.icon-button {
+  flex: 0 0 34px;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.scroll-navigation > button.icon-button:hover {
+  background: var(--surface-muted);
 }
 
 .timeline-fixed-layout .timeline-feed-region {
@@ -412,7 +457,7 @@ textarea:focus-visible,
   scrollbar-gutter: stable;
 }
 
-.composer-bottom-layout .timeline-feed-region {
+.composer-bottom-layout .feed-scroll-layout {
   order: 1;
 }
 
@@ -1076,18 +1121,47 @@ textarea:focus-visible,
   gap: 1px;
 }
 
-.item-menu-toggle {
-  display: none;
+.item-actions .item-menu-toggle {
+  display: inline-grid;
 }
 
 .item-actions-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 6;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 148px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.item-actions.is-open .item-actions-panel {
   display: flex;
-  align-items: center;
-  gap: 1px;
+}
+
+.item-actions-panel button {
+  width: 100%;
+  min-height: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  justify-items: start;
+  padding: 0 8px;
+  grid-auto-flow: column;
+  grid-auto-columns: 20px 1fr;
+  gap: 8px;
+  font-size: 13px;
 }
 
 .item-actions-panel button span {
-  display: none;
+  display: inline;
+  color: inherit;
 }
 
 .feed-item:has(.item-actions.is-open) {
@@ -2556,6 +2630,8 @@ textarea:focus-visible,
   }
 
   .workspace {
+    --workspace-content-width: 720px;
+    --workspace-gutter: 15px;
     margin-left: 0;
   }
 
@@ -2567,7 +2643,7 @@ textarea:focus-visible,
   .workspace-header {
     min-height: 76px;
     gap: 12px;
-    padding: 12px 18px;
+    padding-block: 12px;
   }
 
   .workspace-heading {
@@ -2588,7 +2664,6 @@ textarea:focus-visible,
   }
 
   .workspace-body {
-    width: min(720px, calc(100% - 30px));
     padding-top: 24px;
   }
 
@@ -2606,12 +2681,16 @@ textarea:focus-visible,
 }
 
 @media (max-width: 640px) {
+  .workspace {
+    --workspace-gutter: 11px;
+  }
+
   .workspace-header {
     align-items: center;
     flex-wrap: nowrap;
     min-height: 52px;
     gap: 8px;
-    padding: 8px 12px;
+    padding-block: 8px;
   }
 
   .workspace-heading {
@@ -2628,7 +2707,7 @@ textarea:focus-visible,
   }
 
   /* 搜索默认收成顶栏图标；展开后顶替标题，不再单独占一行。 */
-  .search-toggle {
+  .workspace-header .search-toggle {
     display: inline-grid;
   }
 
@@ -2644,13 +2723,20 @@ textarea:focus-visible,
   .workspace-header.is-searching .search-field {
     display: flex;
     width: auto;
+    min-width: 0;
     flex: 1;
     height: 36px;
+    gap: 6px;
     margin-left: 0;
+    padding-inline: 8px;
+  }
+
+  /* 搜索展开后省去重复图标，为输入文字和常驻操作保留空间。 */
+  .workspace-header.is-searching .search-field > svg {
+    display: none;
   }
 
   .workspace-body {
-    width: calc(100% - 22px);
     padding: 14px 0 24px;
   }
 
@@ -2743,6 +2829,8 @@ textarea:focus-visible,
   .segmented button {
     min-width: 0;
     flex: 1;
+    padding-inline: 4px;
+    white-space: nowrap;
   }
 
   .feed-toolbar-actions {
@@ -2761,48 +2849,8 @@ textarea:focus-visible,
     height: 34px;
   }
 
-  .item-menu-toggle {
-    display: inline-grid;
-  }
-
   .item-actions {
     justify-content: flex-end;
-  }
-
-  .item-actions-panel {
-    display: none;
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 6;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 148px;
-    padding: 6px;
-    border: 1px solid var(--line-strong);
-    border-radius: 8px;
-    background: var(--surface);
-    box-shadow: var(--shadow);
-  }
-
-  .item-actions.is-open .item-actions-panel {
-    display: flex;
-  }
-
-  .item-actions-panel button {
-    width: 100%;
-    height: 36px;
-    justify-items: start;
-    padding: 0 8px;
-    grid-auto-flow: column;
-    grid-auto-columns: 20px 1fr;
-    gap: 8px;
-    font-size: 13px;
-  }
-
-  .item-actions-panel button span {
-    display: inline;
-    color: inherit;
   }
 
   .cleanup-summary {
