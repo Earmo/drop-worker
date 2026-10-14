@@ -37,17 +37,28 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: 启动 MinIO
+      - name: 启动 Silo
+        timeout-minutes: 5
+        # 固定社区维护版本，使用镜像内置 mcli，避免依赖已不可用的上游镜像。
         run: >-
-          docker run -d --name minio -p 9000:9000
+          docker run -d --name silo -p 127.0.0.1:9000:9000
           -e MINIO_ROOT_USER=dropworker -e MINIO_ROOT_PASSWORD=dropworker-test-secret
-          minio/minio:latest server /data
+          pgsty/silo:RELEASE.2026-09-16T00-00-00Z server /data
       - name: 创建私有测试桶
-        run: >-
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c
-          'until mc alias set local http://127.0.0.1:9000 dropworker dropworker-test-secret; do sleep 2; done;
-          mc mb --ignore-existing local/drop-worker'
-      - name: PostgreSQL 与 MinIO
+        timeout-minutes: 2
+        run: |
+          # 就绪探测有次数和请求超时限制，启动失败时不再无限等待。
+          for attempt in {1..30}; do
+            if curl --fail --silent --max-time 2 http://127.0.0.1:9000/minio/health/ready; then
+              docker exec silo mcli alias set local http://127.0.0.1:9000 dropworker dropworker-test-secret
+              docker exec silo mcli mb --ignore-existing local/drop-worker
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Silo 未在限定时间内就绪。"
+          exit 1
+      - name: PostgreSQL 与 Silo
         env:
           RUN_EXTERNAL_STORAGE_TESTS: "true"
           DATABASE_DRIVER: postgres
@@ -62,7 +73,7 @@ jobs:
           S3_ACCESS_KEY_ID: dropworker
           S3_SECRET_ACCESS_KEY: dropworker-test-secret
         run: node --import tsx --test tests/external-storage.test.ts
-      - name: MySQL 与 MinIO
+      - name: MySQL 与 Silo
         env:
           RUN_EXTERNAL_STORAGE_TESTS: "true"
           DATABASE_DRIVER: mysql
@@ -77,3 +88,9 @@ jobs:
           S3_ACCESS_KEY_ID: dropworker
           S3_SECRET_ACCESS_KEY: dropworker-test-secret
         run: node --import tsx --test tests/external-storage.test.ts
+      - name: 输出 Silo 诊断日志
+        if: failure()
+        run: docker logs silo
+      - name: 清理 Silo
+        if: always()
+        run: docker rm -f -v silo || true

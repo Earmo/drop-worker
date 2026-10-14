@@ -7,7 +7,7 @@
 | 方式 | 适用场景 | 数据与文件存储 |
 | --- | --- | --- |
 | 本地 Node.js | 单机或内网自托管 | SQLite/MySQL/PostgreSQL + 本地文件系统/S3 兼容存储 |
-| Docker Compose | 隔离运行环境，或使用 Docker Hub 镜像 | 默认 SQLite + 本地文件系统，也可接外部数据库和 S3/MinIO |
+| Docker Compose | 隔离运行环境，或使用 Docker Hub 镜像 | 默认 SQLite + 本地文件系统，也可接外部数据库和 S3/Silo |
 | Cloudflare Worker | 使用 Cloudflare 托管公网服务；可手工或自动发布 | D1 或 Hyperdrive + R2/S3 兼容对象存储 |
 
 仓库的 GitHub Actions 发布流程不是独立部署方式，而是专门面向 Cloudflare Worker 的自动化部署入口。它不会部署本地 Node.js 或 Docker Compose 实例，也不是可复用于其他平台的通用发布流水线。
@@ -87,17 +87,19 @@ docker compose up -d --build
 
 默认 Docker Compose 与直接命令运行使用相同的 SQLite 和本地文件系统适配器，不会使用 Cloudflare D1/R2。
 
-### MySQL、PostgreSQL 与 S3/MinIO
+### MySQL、PostgreSQL 与 S3/Silo
 
 关系型数据库与对象存储可以独立组合：
 
 - DATABASE_DRIVER=sqlite|mysql|postgres；MySQL 要求 8.0+，PostgreSQL 要求 14+，当前不承诺 MariaDB。
 - BLOB_DRIVER=local|s3；S3 模式配置 region、私有桶、对象前缀与可选自定义 endpoint。
 - 外部数据库使用 DATABASE_URL，应用启动时只校验架构，不自动执行 DDL。首次启动或升级前运行 npm run admin -- migrate-database。
-- S3 桶必须预先创建且保持私有。未配置静态密钥时使用 AWS 默认凭据链；MinIO 通常需要 S3_FORCE_PATH_STYLE=true。
+- S3 桶必须预先创建且保持私有。未配置静态密钥时使用 AWS 默认凭据链；Silo/MinIO 通常需要 S3_FORCE_PATH_STYLE=true。
 - 数据库和 S3 默认要求加密连接。局域网明文连接必须分别显式开启 DATABASE_ALLOW_INSECURE 或 S3_ALLOW_INSECURE。
 
-仓库在 examples/compose/ 提供 PostgreSQL+MinIO 与 MySQL+MinIO 的完整 Compose 示例。自托管当前仍只承诺单个活动应用实例，不代表高可用集群。
+仓库在 examples/compose/ 提供 PostgreSQL+Silo 与 MySQL+Silo 的 Compose 示例。对象存储使用 [PGSTY Silo](https://github.com/pgsty/silo)，固定镜像版本为 `pgsty/silo:RELEASE.2026-09-16T00-00-00Z`，通过镜像内置的 `mcli` 创建私有桶，不再拉取上游 MinIO 服务端或客户端镜像。GitHub Actions 外部存储集成测试使用相同版本。
+
+为保留现有调用路径和持久化数据，示例文件名 `postgres-minio.yaml`、`mysql-minio.yaml`，服务名 `minio`、数据卷名 `minio-data` 与 `MINIO_*` 环境变量保持不变。已有实例升级前应备份数据并按 [Silo 迁移指南](https://silo.pgsty.com/compatibility/migration/) 验证恢复与兼容性。自托管当前仍只承诺单个活动应用实例，不代表高可用集群。
 
 ### 使用 Docker Hub 镜像
 

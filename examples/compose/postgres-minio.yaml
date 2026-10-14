@@ -14,7 +14,8 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio:latest
+    # 保留服务名、卷名与 MINIO_* 配置，避免升级时切换到空数据卷。
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
     command: server /data --console-address :9001
     restart: unless-stopped
     environment:
@@ -22,15 +23,22 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?请设置 MINIO_ROOT_PASSWORD}
     volumes: [minio-data:/data]
     ports: ["9001:9001"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   create-bucket:
-    image: minio/mc:latest
-    depends_on: [minio]
+    image: pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      minio: { condition: service_healthy }
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        until mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD; do sleep 2; done;
-        mc mb --ignore-existing local/drop-worker
+        mcli alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mcli mb --ignore-existing local/drop-worker
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?请设置 MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?请设置 MINIO_ROOT_PASSWORD}
