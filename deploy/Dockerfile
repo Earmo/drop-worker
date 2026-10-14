@@ -14,7 +14,8 @@ COPY --from=build /app/package.json /app/package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
-COPY --from=build /app/apps ./apps
+# Node 服务直接加载 API 源码；前端由 dist 中的构建产物提供。
+COPY --from=build /app/api ./api
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/db ./db
 COPY --from=build /app/drizzle ./drizzle
