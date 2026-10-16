@@ -170,6 +170,20 @@ test("所有屏幕的条目编辑和分享都由更多菜单触发", async () =>
   assert.match(app, /toolbar\?\.bottom \?\? bounds\?\.top/);
 });
 
+test("复制和收藏直接显示在条目右侧，不再出现在更多菜单内", async () => {
+  const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
+  const entry = app.slice(app.indexOf("function ItemEntry("));
+  const [actions, menu] = entry.split('className="item-actions-panel"');
+  assert.match(actions, /aria-label="复制"/);
+  assert.match(actions, /aria-pressed=\{item.favorite\}/);
+  assert.match(actions, /aria-label=\{item.favorite \? "取消收藏" : "收藏"\}/);
+  assert.doesNotMatch(menu, /aria-label="复制"|aria-label=\{item.favorite/);
+  assert.match(menu, /aria-label="编辑"/);
+  assert.match(menu, /aria-label="分享"/);
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /grid-template-columns: 24px 34px minmax\(0, 1fr\) auto/);
+});
+
 test("手动刷新保留列表并反馈状态，过期分页不得混入新列表", async () => {
   const app = await readFile(new URL("../app/drop-app.tsx", import.meta.url), "utf8");
   assert.match(app, /onClick=\{\(\) => void loadData\(true, true\)\}/);
