@@ -2839,7 +2839,7 @@ textarea:focus-visible,
   }
 
   .feed-item {
-    grid-template-columns: 24px 34px minmax(0, 1fr) 34px;
+    grid-template-columns: 24px 34px minmax(0, 1fr) auto;
     gap: 8px;
     padding: 13px 10px 12px 8px;
   }

@@ -1785,7 +1785,7 @@ function ItemEntry({
   }, [menuOpen]);
 
   useEffect(() => {
-    // 所有屏幕统一使用更多菜单；点击外部时关闭，避免遮挡其他条目。
+    // 次要操作保留在更多菜单；点击外部时关闭，避免遮挡其他条目。
     if (!menuOpen) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
@@ -1903,6 +1903,30 @@ function ItemEntry({
           if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
         }}
       >
+        {(item.type === "text" || item.type === "link" || isImage) && !trash && (
+          <button
+            onClick={() => {
+              closeMenu();
+              void copy();
+            }}
+            aria-label="复制"
+            title={copied ? "已复制" : isImage ? "复制图片地址" : "复制"}
+          >
+            {copied ? <Check size={16} /> : <Copy size={16} />}
+          </button>
+        )}
+        {!trash && (
+          <button
+            className={item.favorite ? "active favorite" : ""}
+            onClick={() => {
+              closeMenu();
+              void onUpdate(item.id, { favorite: !item.favorite });
+            }}
+            aria-label={item.favorite ? "取消收藏" : "收藏"}
+            aria-pressed={item.favorite}
+            title={item.favorite ? "取消收藏" : "收藏"}
+          ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /></button>
+        )}
         <button
           className="item-menu-toggle"
           ref={menuToggleRef}
@@ -1949,18 +1973,6 @@ function ItemEntry({
           {!trash && (
             <button
               role="menuitem"
-              className={item.favorite ? "active favorite" : ""}
-              onClick={() => {
-                closeMenu();
-                void onUpdate(item.id, { favorite: !item.favorite });
-              }}
-              aria-label={item.favorite ? "取消收藏" : "收藏"}
-              title={item.favorite ? "取消收藏" : "收藏"}
-            ><Star size={16} fill={item.favorite ? "currentColor" : "none"} /><span>{item.favorite ? "取消收藏" : "收藏"}</span></button>
-          )}
-          {!trash && (
-            <button
-              role="menuitem"
               onClick={() => {
                 closeMenu();
                 // 可能刚从其他设备刷新了内容；每次打开编辑都以当前条目为准。
@@ -1983,20 +1995,6 @@ function ItemEntry({
               title="分享"
             >
               <Share2 size={16} /><span>分享</span>
-            </button>
-          )}
-          {(item.type === "text" || item.type === "link" || isImage) && !trash && (
-            <button
-              role="menuitem"
-              onClick={() => {
-                closeMenu();
-                void copy();
-              }}
-              aria-label="复制"
-              title={isImage ? "复制图片地址" : "复制"}
-            >
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-              <span>{copied ? "已复制" : isImage ? "复制图片地址" : "复制"}</span>
             </button>
           )}
           {trash ? (
